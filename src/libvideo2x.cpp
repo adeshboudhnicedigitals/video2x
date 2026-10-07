@@ -210,8 +210,12 @@ int VideoProcessor::process_frames(
     encoder::Encoder& encoder,
     std::unique_ptr<processors::Processor>& processor
 ) {
-    if (queue_size_ > 0) {
+    if (queue_size_ > 0 && hw_device_type_ == AV_HWDEVICE_TYPE_NONE) {
         return process_frames_pipelined(decoder, encoder, processor);
+    }
+    if (queue_size_ > 0) {
+        logger()->info("Hardware decoding is enabled; pipelining is disabled to avoid "
+            "exhausting the decoder's frame pool");
     }
     return process_frames_serial(decoder, encoder, processor);
 }

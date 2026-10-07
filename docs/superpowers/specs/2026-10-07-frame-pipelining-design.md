@@ -68,6 +68,7 @@ av_read_frame
   `tools/video2x/src/argparse.cpp`.
 - `queue_size = 0` disables the pipeline and runs the existing serial code path.
   This is the fallback and the baseline for equivalence testing.
+- Pipelining is also skipped when hardware decoding (`--hwaccel`) is enabled.
 
 ## Pause, abort, errors, progress
 
@@ -112,7 +113,5 @@ Steps 2 to 4 require a working Vulkan GPU.
 
 - Muxer locking is the main correctness risk; all writes to the output
   `AVFormatContext` must go through `Encoder` and the mutex.
-- Hardware decode (`hw_device_type`) frames and the decoder's frame pool: frames
-  held in Queue A keep decoder buffers referenced. Queue depth must stay small
-  enough not to exhaust the pool. To be checked during implementation.
+- Hardware decode (`hw_device_type`): frames queued between stages would keep decoder pool surfaces referenced and can exhaust a fixed-size pool. Resolution: the dispatcher uses the serial loop whenever a hardware device type is set, and logs it.
 - Memory grows by up to `queue_size` frames per queue.
