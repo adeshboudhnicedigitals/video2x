@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Current work
+
+See `HANDOFF.md` for the state of the pipelining work, the Colab notebook (`Video2X.ipynb`), measurements so far and the open items.
+
 ## Overview
 
 Video2X is a C++ video super-resolution and frame-interpolation framework (v6 rewrite). It builds two things from one CMake project: `libvideo2x` (the library, shared by default) and the `video2x` CLI (`tools/video2x`, toggle with `VIDEO2X_BUILD_CLI`). FFmpeg does decode/encode; ncnn+Vulkan or libplacebo does the ML/shader work. There is no test suite.
