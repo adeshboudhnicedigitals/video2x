@@ -63,8 +63,9 @@ av_read_frame
 
 ## Configuration
 
-- New `queue_size` field (default 4) on the library configuration, and a
-  `--queue-size` CLI option in `tools/video2x/src/argparse.cpp`.
+- New `queue_size` constructor parameter (default 4) on `VideoProcessor`
+  (there is no general configuration struct), and a `--queue-size` CLI option in
+  `tools/video2x/src/argparse.cpp`.
 - `queue_size = 0` disables the pipeline and runs the existing serial code path.
   This is the fallback and the baseline for equivalence testing.
 
@@ -85,7 +86,9 @@ av_read_frame
 - **Progress**: `frame_idx_` remains the number of frames produced by the GPU
   stage, so the CLI progress bar works unchanged. It may run a few frames ahead
   of what has been encoded. `total_frames_` is unchanged.
-- **Benchmark mode**: the encode thread drains Queue B and discards frames.
+- **Benchmark mode**: frames are not pushed to Queue B at all (as the serial
+  path skips `Encoder::write_frame`); the encode thread only waits for the
+  queue to close and then calls `Encoder::flush()`, as the serial path does.
 - **Flush ordering**: decode thread closes Queue A at EOF; GPU stage drains it,
   calls `processor->flush()`, pushes flushed frames, closes Queue B; encode
   thread drains Queue B, then calls `Encoder::flush()`. Threads are joined
