@@ -75,13 +75,17 @@ av_read_frame
 - **Pause** is handled in the GPU stage (stops popping while `Paused`, same
   100 ms sleep). Queue A fills and the decode thread blocks on push; the encode
   thread drains Queue B and idles.
-- **Abort** closes both queues. Every thread exits its loop; the decode thread
-  also checks the state between packets. The trailer is written after joins, as
-  today.
+- **Abort** stops the decode thread (Queue A is cancelled; the decode thread
+  also checks the state between packets). The GPU stage then flushes the
+  processor and the encode thread drains Queue B and flushes the encoder, as the
+  serial path does, so the truncated output is valid. The trailer is written
+  after joins, as today.
 - **Errors**: one shared first-error slot (mutex-protected `int`). The failing
-  thread stores its error if the slot is empty, sets state `Failed` and closes
-  both queues. Errors caused by the shutdown are ignored, so the reported error
-  is the root cause. `process_frames` returns the stored error.
+  thread stores its error if the slot is empty and closes both queues. Errors
+  caused by the shutdown are ignored, so the reported error is the root cause.
+  `process_frames` returns the stored error and `process()` sets state `Failed`
+  after the threads are joined (a worker setting it could race with a user's
+  pause/resume).
 - **Joins**: both worker threads are joined on every exit path by an RAII guard,
   so an early return cannot leave a thread running against destroyed objects.
 - **Progress**: `frame_idx_` remains the number of frames produced by the GPU

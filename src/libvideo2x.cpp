@@ -214,8 +214,10 @@ int VideoProcessor::process_frames(
         return process_frames_pipelined(decoder, encoder, processor);
     }
     if (queue_size_ > 0) {
-        logger()->info("Hardware decoding is enabled; pipelining is disabled to avoid "
-            "exhausting the decoder's frame pool");
+        logger()->info(
+            "Hardware decoding is enabled; pipelining is disabled to avoid "
+            "exhausting the decoder's frame pool"
+        );
     }
     return process_frames_serial(decoder, encoder, processor);
 }

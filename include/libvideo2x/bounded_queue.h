@@ -13,7 +13,7 @@ namespace video2x {
 template <typename T>
 class BoundedQueue {
    public:
-    explicit BoundedQueue(size_t capacity) : capacity_(capacity == 0 ? 1 : capacity) {}
+    explicit BoundedQueue(std::size_t capacity) : capacity_(capacity == 0 ? 1 : capacity) {}
 
     BoundedQueue(const BoundedQueue&) = delete;
     BoundedQueue& operator=(const BoundedQueue&) = delete;
@@ -63,7 +63,7 @@ class BoundedQueue {
     }
 
    private:
-    const size_t capacity_;
+    const std::size_t capacity_;
     std::mutex mutex_;
     std::condition_variable not_empty_;
     std::condition_variable not_full_;
