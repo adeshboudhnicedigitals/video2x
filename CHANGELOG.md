@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Pipelined decoding, processing, and encoding on separate threads, with the `--queue-size` option (`0` disables it).
 - Option to recalculate the PTS.
 - Real-ESRGAN models `realesr-general-x4v3` and `realesr-general-wdn-x4v3` (#1319).
 - (Video2X Qt6) Korean translation.
