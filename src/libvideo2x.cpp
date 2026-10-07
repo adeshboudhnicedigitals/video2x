@@ -1,5 +1,11 @@
 #include "libvideo2x.h"
 
+#include <chrono>
+#include <mutex>
+#include <optional>
+#include <thread>
+#include <vector>
+
 extern "C" {
 #include <libavutil/avutil.h>
 }
@@ -14,6 +20,42 @@ extern "C" {
 #include "processor_factory.h"
 
 namespace video2x {
+
+namespace {
+
+// State shared by the decode, GPU and encode stages of the pipelined loop
+struct PipelineState {
+    explicit PipelineState(size_t capacity) : decoded(capacity), encoded(capacity) {}
+
+    BoundedQueue<FramePtr> decoded;
+    BoundedQueue<EncodeItem> encoded;
+    std::atomic<bool> failed{false};
+
+    // Records the root-cause error (later ones are consequences of the shutdown
+    // and are ignored) and wakes every stage so it can unwind
+    void fail(int error_code) {
+        {
+            std::lock_guard<std::mutex> lock(error_mutex_);
+            if (first_error_ == 0) {
+                first_error_ = error_code;
+            }
+        }
+        failed.store(true);
+        decoded.cancel();
+        encoded.cancel();
+    }
+
+    int get_error() {
+        std::lock_guard<std::mutex> lock(error_mutex_);
+        return first_error_;
+    }
+
+   private:
+    std::mutex error_mutex_;
+    int first_error_ = 0;
+};
+
+}  // namespace
 
 VideoProcessor::VideoProcessor(
     const processors::ProcessorConfig proc_cfg,
@@ -179,8 +221,244 @@ int VideoProcessor::process_frames_pipelined(
     encoder::Encoder& encoder,
     std::unique_ptr<processors::Processor>& processor
 ) {
-    // Implemented in the next task; run serially until then
-    return process_frames_serial(decoder, encoder, processor);
+    char errbuf[AV_ERROR_MAX_STRING_SIZE];
+    int ret = 0;
+
+    AVFormatContext* ifmt_ctx = decoder.get_format_context();
+    AVCodecContext* dec_ctx = decoder.get_codec_context();
+    int in_vstream_idx = decoder.get_video_stream_index();
+    AVCodecContext* enc_ctx = encoder.get_encoder_context();
+    int* stream_map = encoder.get_stream_map();
+
+    init_total_frames(ifmt_ctx, in_vstream_idx, *processor);
+
+    PipelineState ps(static_cast<size_t>(queue_size_));
+
+    // Decode stage: reads packets, decodes video into the first queue and muxes
+    // audio/subtitle packets directly
+    auto decode_stage = [&]() {
+        char err[AV_ERROR_MAX_STRING_SIZE];
+        std::unique_ptr<AVFrame, decltype(&avutils::av_frame_deleter)> frame(
+            av_frame_alloc(), &avutils::av_frame_deleter
+        );
+        std::unique_ptr<AVPacket, decltype(&avutils::av_packet_deleter)> packet(
+            av_packet_alloc(), &avutils::av_packet_deleter
+        );
+        if (frame == nullptr || packet == nullptr) {
+            logger()->critical("Error allocating frame or packet");
+            ps.fail(AVERROR(ENOMEM));
+            ps.decoded.close();
+            return;
+        }
+
+        while (state_.load() != VideoProcessorState::Aborted && !ps.failed.load()) {
+            int dec_ret = av_read_frame(ifmt_ctx, packet.get());
+            if (dec_ret < 0) {
+                if (dec_ret == AVERROR_EOF) {
+                    logger()->debug("Reached end of file");
+                    break;
+                }
+                av_strerror(dec_ret, err, sizeof(err));
+                logger()->critical("Error reading packet: {}", err);
+                ps.fail(dec_ret);
+                break;
+            }
+
+            if (packet->stream_index == in_vstream_idx) {
+                dec_ret = avcodec_send_packet(dec_ctx, packet.get());
+                if (dec_ret < 0) {
+                    av_strerror(dec_ret, err, sizeof(err));
+                    logger()->critical("Error sending packet to decoder: {}", err);
+                    ps.fail(dec_ret);
+                    break;
+                }
+
+                bool queue_open = true;
+                while (queue_open) {
+                    dec_ret = avcodec_receive_frame(dec_ctx, frame.get());
+                    if (dec_ret == AVERROR(EAGAIN)) {
+                        break;
+                    } else if (dec_ret < 0) {
+                        av_strerror(dec_ret, err, sizeof(err));
+                        logger()->critical("Error decoding video frame: {}", err);
+                        ps.fail(dec_ret);
+                        queue_open = false;
+                        break;
+                    }
+
+                    // Move the decoded frame into its own AVFrame for the queue
+                    FramePtr decoded(av_frame_alloc(), &avutils::av_frame_deleter);
+                    if (decoded == nullptr) {
+                        ps.fail(AVERROR(ENOMEM));
+                        queue_open = false;
+                        break;
+                    }
+                    av_frame_move_ref(decoded.get(), frame.get());
+                    queue_open = ps.decoded.push(std::move(decoded));
+                }
+                if (!queue_open) {
+                    break;
+                }
+            } else if ((enc_cfg_.copy_audio_streams || enc_cfg_.copy_subtitle_streams) &&
+                       stream_map[packet->stream_index] >= 0) {
+                dec_ret = encoder.write_raw_packet(packet.get(), ifmt_ctx);
+                if (dec_ret < 0) {
+                    ps.fail(dec_ret);
+                    break;
+                }
+            }
+            av_packet_unref(packet.get());
+        }
+
+        // No more frames will be produced
+        ps.decoded.close();
+    };
+
+    // Encode stage: encodes and muxes frames from the second queue
+    auto encode_stage = [&]() {
+        while (true) {
+            std::optional<EncodeItem> item = ps.encoded.pop();
+            if (!item.has_value()) {
+                break;
+            }
+            int enc_ret = encoder.write_frame(item->frame.get(), item->idx);
+            if (enc_ret < 0) {
+                char err[AV_ERROR_MAX_STRING_SIZE];
+                av_strerror(enc_ret, err, sizeof(err));
+                logger()->critical("Error encoding/writing frame: {}", err);
+                ps.fail(enc_ret);
+                return;
+            }
+        }
+        if (ps.failed.load()) {
+            return;
+        }
+
+        int enc_ret = encoder.flush();
+        if (enc_ret < 0) {
+            char err[AV_ERROR_MAX_STRING_SIZE];
+            av_strerror(enc_ret, err, sizeof(err));
+            logger()->critical("Error flushing encoder: {}", err);
+            ps.fail(enc_ret);
+        }
+    };
+
+    // Always unblock and join the worker threads, whatever path we leave by
+    struct StageGuard {
+        PipelineState& ps;
+        std::thread& decode_thread;
+        std::thread& encode_thread;
+        BoundedQueue<EncodeItem>*& out_queue;
+
+        ~StageGuard() {
+            ps.decoded.cancel();
+            ps.encoded.cancel();
+            if (decode_thread.joinable()) {
+                decode_thread.join();
+            }
+            if (encode_thread.joinable()) {
+                encode_thread.join();
+            }
+            out_queue = nullptr;
+        }
+    };
+
+    std::thread decode_thread;
+    std::thread encode_thread;
+    StageGuard guard{ps, decode_thread, encode_thread, out_queue_};
+    out_queue_ = &ps.encoded;
+    decode_thread = std::thread(decode_stage);
+    encode_thread = std::thread(encode_stage);
+
+    // GPU stage: runs on the calling thread
+    std::unique_ptr<AVFrame, decltype(&avutils::av_frame_deleter)> prev_frame(
+        nullptr, &avutils::av_frame_deleter
+    );
+
+    while (true) {
+        // Sleep for 100 ms if processing is paused
+        while (state_.load() == VideoProcessorState::Paused && !ps.failed.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (state_.load() == VideoProcessorState::Aborted || ps.failed.load()) {
+            break;
+        }
+
+        std::optional<FramePtr> item = ps.decoded.pop();
+        if (!item.has_value()) {
+            break;
+        }
+        AVFrame* frame = item->get();
+
+        // Calculate this frame's presentation timestamp (PTS)
+        if (enc_cfg_.recalculate_pts) {
+            frame->pts =
+                av_rescale_q(frame_idx_, av_inv_q(enc_ctx->framerate), enc_ctx->time_base);
+        }
+
+        // Process the frame based on the selected processing mode
+        AVFrame* proc_frame = nullptr;
+        switch (processor->get_processing_mode()) {
+            case processors::ProcessingMode::Filter: {
+                ret = process_filtering(processor, encoder, frame, proc_frame);
+                break;
+            }
+            case processors::ProcessingMode::Interpolate: {
+                ret = process_interpolation(processor, encoder, prev_frame, frame, proc_frame);
+                break;
+            }
+            default:
+                logger()->critical("Unknown processing mode");
+                ps.fail(-1);
+                return ps.get_error();
+        }
+        if (ret < 0 && ret != AVERROR(EAGAIN)) {
+            ps.fail(ret);
+            break;
+        }
+        frame_idx_.fetch_add(1);
+        logger()->debug("Processed frame {}/{}", frame_idx_.load(), total_frames_.load());
+    }
+
+    // The decode stage is no longer needed; unblock it if it is waiting on a full queue
+    ps.decoded.cancel();
+    if (decode_thread.joinable()) {
+        decode_thread.join();
+    }
+    if (ps.failed.load()) {
+        return ps.get_error();
+    }
+
+    // Flush the processor
+    std::vector<AVFrame*> raw_flushed_frames;
+    ret = processor->flush(raw_flushed_frames);
+    if (ret < 0) {
+        av_strerror(ret, errbuf, sizeof(errbuf));
+        logger()->critical("Error flushing processor: {}", errbuf);
+        ps.fail(ret);
+        return ps.get_error();
+    }
+
+    // Wrap flushed frames in unique_ptrs
+    std::vector<FramePtr> flushed_frames;
+    for (AVFrame* raw_frame : raw_flushed_frames) {
+        flushed_frames.emplace_back(raw_frame, &avutils::av_frame_deleter);
+    }
+
+    // Queue all flushed frames for encoding
+    for (auto& flushed_frame : flushed_frames) {
+        ret = write_frame(flushed_frame.get(), encoder);
+        if (ret < 0) {
+            ps.fail(ret);
+            return ps.get_error();
+        }
+        frame_idx_.fetch_add(1);
+    }
+
+    // Let the encode stage drain its queue, flush the encoder and finish
+    ps.encoded.close();
+    encode_thread.join();
+    return ps.get_error();
 }
 
 // Process frames using the selected filter.
@@ -346,6 +624,18 @@ int VideoProcessor::write_frame(AVFrame* frame, encoder::Encoder& encoder) {
     int ret = 0;
 
     if (!benchmark_) {
+        if (out_queue_ != nullptr) {
+            // Pipelined: hand a reference to the encode thread
+            FramePtr frame_ref(av_frame_clone(frame), &avutils::av_frame_deleter);
+            if (frame_ref == nullptr) {
+                return AVERROR(ENOMEM);
+            }
+            if (!out_queue_->push(EncodeItem{std::move(frame_ref), frame_idx_.load()})) {
+                return AVERROR_EXIT;
+            }
+            return 0;
+        }
+
         ret = encoder.write_frame(frame, frame_idx_.load());
         if (ret < 0) {
             av_strerror(ret, errbuf, sizeof(errbuf));
