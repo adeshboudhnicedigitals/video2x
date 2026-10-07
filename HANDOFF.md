@@ -16,8 +16,9 @@ Read `CLAUDE.md` first for build commands and architecture; this file covers the
 - Never run `git add -A`. These stay **untracked and uncommitted** on purpose:
   - `AnimePahe_Bleach_-_271_BD_1080p_Judas.mp4` (222 MB) and `Bleach - 309.mkv` (349 MB): the user's episodes, large and not ours to publish.
   - `download.png`: a screenshot of the Step 3D comparison (a frame from the show).
+  - On the Linux machine: `[AniDL] Bleach S14 - 06 - [1080P][BD][D-A][ZR][X265].mkv` (the user's episode) and `sample_10s.mp4` (its first 10 s, 1920x1080, 29.97 fps, 300 frames; the sample used for the Colab tests). Local test clips and outputs go under `data/`, which is git-ignored.
   - `.superpowers/` is git-ignored local scratch (task briefs, reports, one-off notebook edit scripts, a progress ledger). It is not part of the repo.
-- Commit style: Conventional Commits with the module as scope; end messages with `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`. `clang-format` was never available locally, so formatting was done by eye.
+- Commit style: Conventional Commits with the module as scope; end messages with the `Co-Authored-By` line the session provides. `clang-format` is not available on the Windows machine (formatting was done by eye there); it is on the Linux machine and was used for the changes of 2026-10-08.
 
 ## 3. What was built
 
@@ -76,6 +77,7 @@ Source: user's sample, 1920x1080, 30 fps. Model `realesr-animevideov3`.
 | Speed test (cell 3.1), 147 frames, 1080p x2 to 4K, 2026-10-07 | A no encoding 1.35 fps; B x264 veryfast pipelined 1.31; C serial 1.26; D `hevc_nvenc` failed (`Invalid encoder`). B is 97% of A, pipelining gives 1.04x, hashes identical |
 | Full 10 s sample (298 of 300 frames), 1080p x2 to 4K, x264 veryfast crf 20 | 1.35 fps, 223 s wall |
 | Resource monitor over those runs | GPU utilisation 78-81%; throttle reason "software power cap" in 190 of 201 samples; SM clock 840-983 MHz (maximum 1590); power 62-64 W |
+| Speed test (cell 3.1), 149 frames, 1080p x2 resized to 1080p, x264 slow crf 18, 2026-10-08 | A no encoding 1.37 fps; B x264 slow 1.23 (90% of A); tile 400 1.48 (1.08x A); tile 1000 1.38; tile 1920 1.39. 149 frames against 147 before the decoder flush fix |
 
 Reading: the 8K tests are CPU-bound and say little about the GPU backends. At 4K the GPU is the limit (power-capped T4). Model choice barely changes speed. Shrinking to 720p first is ~2.15x faster (it cuts both input and output pixels by 2.25x; this test cannot say which of those mattered).
 
@@ -86,8 +88,8 @@ Visual impressions (single frame, from the Step 3D image): all models are clearl
 **Changes of 2026-10-08 after the speed test (built and checked on the Linux machine, not yet run on Colab):**
 
 - Decoder flush: both loops in `src/libvideo2x.cpp` now send a null packet at end of file and drain the decoder, so the last frames are no longer dropped (the 298-of-300 and 147-of-150 counts above). A 12-frame clip with B-frames now gives 12 of 12 frames in both the pipelined and the serial loop, with identical hashes.
-- `--realesrgan-tile-size N` (0 = automatic, as before; minimum 32). The tile size used is logged at `info` level. On a T4 the automatic size is 200, so a 1080p frame is 60 tiles, each with a 10-pixel border: about 21% extra pixels. Tile 400 against 200 on a 320x180 frame differs slightly (58 dB PSNR), from the tile seams. Whether larger tiles are faster on the T4 is **not measured**; cell 3.1 now has T runs for it (`tile_sizes = [400, 1000, 1920]`).
-- Notebook defaults: cell 2.1 uses x264 `slow`, `crf` 18 (was `veryfast`, 20) and has `tile_size`; cell 3.1 runs at 1080p output with the same x264 settings, with the serial and NVENC runs off by default. Whether `slow` at 1080p holds the GPU back on 2 vCPUs is **not measured**; run B against A in cell 3.1 answers it.
+- `--realesrgan-tile-size N` (0 = automatic, as before; minimum 32). The tile size used is logged at `info` level. On a T4 the automatic size is 200, so a 1080p frame is 60 tiles, each with a 10-pixel border: about 21% extra pixels. Tile 400 against 200 on a 320x180 frame differs slightly (58 dB PSNR), from the tile seams. Measured on the T4 (single runs): tile 400 is 8% faster than 200, while 1000 and 1920 are only 1% faster (cause not known). Cell 2.1 now defaults to `tile_size = 400`; cell 3.1 lists `[300, 400, 500, 700]` to narrow it down.
+- Notebook defaults: cell 2.1 uses x264 `slow`, `crf` 18 (was `veryfast`, 20) and has `tile_size`; cell 3.1 runs at 1080p output with the same x264 settings, with the serial and NVENC runs off by default. Measured: `slow` at 1080p output reaches 90% of the no-encode ceiling (`veryfast` at 4K reached 97%), so it costs roughly 7-10% of speed. `medium` is not measured.
 
 **Decision (2026-10-08): the model is `realesr-animevideov3`.** The model question is closed; do not re-run the comparison to choose a model.
 
@@ -95,15 +97,35 @@ Visual impressions (single frame, from the Step 3D image): all models are clearl
 
 Estimate: a 24-minute episode is ~35,000 frames: ~7 h at 1.35 fps, ~3.4 h at 2.9 fps.
 
-## 5. Open items, roughly in priority order
+## 5. Where we stopped (2026-10-08) and what is next
 
-Scope note: with the 1080p-only goal, the useful paths are (a) a 720p source upscaled x2 with Real-ESRGAN/Real-CUGAN, and (b) a source already near 1080p (the user's files measure about 1908x1080) cleaned up and sharpened at 1080p, for example by a x2 model and a downscale back to 1080p. Items about 1440p, 4K or 8K below are deferred.
+### Settled, do not reopen
 
-1. **Step 3A was updated** with Real-CUGAN and shrink-first (done, **not yet run on Colab**; its validation and command building were checked offline with a stub). The 1080p final output is now built (`output_height`, see section 4). Still not added, only proposed: a `benchmark` checkbox (`--benchmark`, throwaway output path) to measure the no-encode ceiling, and a Real-CUGAN-from-720p run in Step 3D.
-2. **Finish the evidence:** run Step 3C (serial vs pipelined) and Step 5C with `mode = "no encoding"`; ask for a btop screenshot to see whether both CPU cores saturate (the user noticed GPU ~80% and only 2 cores).
-3. **Target-size feature (design agreed in principle, not specced or built):** `video2x --height 1080` (or `--width`, or both) for Real-ESRGAN/Real-CUGAN: auto-pick the smallest valid integer scale for the model, then Lanczos-resize inside the existing `ncnn_mat_to_avframe` swscale call, with get_output_dimensions reporting the target. Valid factors: animevideov3 {2,3,4}; other Real-ESRGAN {4}; Real-CUGAN se {2,3,4}, pro {2,3}, nose {2}; if the target needs more than the max, use the max and Lanczos-upscale the rest with a warning; if the input is already >= target, run the smallest factor and shrink, with a log line. Resolve on a local copy of the config inside `VideoProcessor::process` (not the member). Currently `--width/--height` are ignored for Real-ESRGAN/Real-CUGAN. **Recommendation made to the user:** defer it, because shrink-to-720p-first then x2 gives exactly 1440p and an ffmpeg downscale gives 1080p; build it only if differently sized inputs make that awkward.
-4. **Speed ideas, untested:** raise the Real-ESRGAN tile cap (hard-coded 200 in `src/filter_realesrgan.cpp` when the heap budget > 1900 MB; only ~151 MB of VRAM was used; tile borders add ~20% overlap work); move RGB/YUV conversions off the GPU thread; try `h264_nvenc` (needs `cq`/`p1-p7` options instead of `crf`/`preset`, and an NVENC-capable FFmpeg build); a faster Colab GPU (L4/A100) is the largest single lever.
-5. **CUDA/TensorRT backend:** the raw network is ~2.85x faster in PyTorch fp16 `channels_last`, but the only end-to-end test was at 8K where the encoder hid any gain. The official `.pth` is x4 only; the repo ships the x2 model only as ncnn `.param/.bin` (a loader would have to read those). Not worth building before items 1-2 show the GPU path is what limits real jobs.
+- **Goal:** 1080p output, best picture quality. Model `realesr-animevideov3`, scale 2, then resize to 1080p (`output_height = 1080`, `--height 1080`).
+- **CPU is not the limit on Colab.** The encoder costs 3% (`veryfast`) to 10% (`slow`), pipelining adds 4%. The T4 is held back by its power cap. The swscale cache and NVENC were not built and should not be.
+- **NVENC does not work** with this build (the FFmpeg libraries `video2x` links have no NVENC encoders). Not worth fixing for a 3-10% ceiling.
+- **Notebook defaults (cell 2.1):** `realesrgan`, `realesr-animevideov3`, scale 2, `output_height = 1080`, `libx264`, `preset = slow`, `crf = 18`, `tile_size = 400`, `queue_size = 4`. Expected speed about 1.33 fps on a T4, which is about 7.2 hours for a 24-minute episode at 23.976 fps (the Colab free limit is 12 hours).
+
+### Not yet verified
+
+- **Cell 2.1 has not been run on Colab since `output_height`, `tile_size` and the `slow` preset were added.** Cell 3.1 used the same options (`--height 1080`, `--realesrgan-tile-size`) successfully, so the binary side works at 1080p; the cell's own command building was only checked offline. First thing to do next session: run 1.2 (rebuild), 1.3 and 2.1 on the 10 s sample, confirm the output is 1920x1080 with 300 of 300 frames, and look at the picture.
+- The picture of the 1080p result has not been looked at by anyone: not against the source, not in motion (flicker), not at tile seams with tile 400.
+- Tile sizes between 300 and 700 (cell 3.1 lists `[300, 400, 500, 700]`; optional rerun). All speed numbers are single runs.
+- x264 `medium` (between `veryfast` at 97% and `slow` at 90% of the ceiling).
+
+### Next, in the order recommended to the user
+
+1. **Verify the real job** (the three checks above) and let the user judge the 1080p picture against the source.
+2. **10-bit path (quality).** The user's sources decode as `yuv420p10le`. `conversions.cpp` converts every frame to 8-bit `BGR24` for the network and back, and the encoder then writes a 10-bit file that holds 8-bit data. This risks banding in gradients (sky, glow). A real fix needs a 16-bit or float path into `ncnn::Mat` and back; medium-sized work. A cheaper first check is whether banding is visible in the output at all.
+3. **Input chroma upsampling (quality).** `convert_avframe_pix_fmt` uses `SWS_BILINEAR` for YUV 4:2:0 to BGR, which softens colour edges before the network sees them. Changing the flag is small but changes every output frame, so it needs a side-by-side check.
+4. **Speed, only large levers are left:** a faster Colab GPU (L4/A100); two Colab sessions with the episode split in half and joined afterwards (frames are independent for this model, so this scales nearly linearly); shrink to 720p first, x2, resize to 1080p (2.93 fps measured against 1.35, looked nearly the same on one frame, but throws away source detail and the user chose full x2 for quality); a TensorRT/CUDA backend (2.85x on the raw network in PyTorch fp16 `channels_last`; large build; the official `.pth` is x4 only and the x2 model exists only as ncnn `.param/.bin`).
+
+### Known problems, not being worked on
+
+- On the Linux machine, Real-ESRGAN hangs at frame 0 on the Intel UHD Vulkan driver with a 1080p input but runs at 320x180, so it depends on frame size (GPU memory or a driver limit; not investigated). Use small clips for local checks.
+- The same machine's NVIDIA MX130 has no working driver.
+- RIFE is broken on Colab (notebook cell 4.1). Cells 4.1-4.4 are experiments kept for reference; the user was asked whether to delete them and has not answered.
+- The proposed auto-pick of the scale factor for a target size was not built; the user sets the scale and the output height themselves.
 
 ## 6. Practical notes
 
