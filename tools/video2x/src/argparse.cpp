@@ -89,6 +89,10 @@ int parse_args(
             ("benchmark,b", po::bool_switch(&arguments.benchmark),
                 "Discard processed frames and calculate average FPS; "
                 "useful for detecting encoder bottlenecks")
+            ("queue-size", po::value<int>(&arguments.queue_size)->default_value(4)
+                ->notifier([](int v) { validate_min(v, "queue-size", 0); }),
+                "Frames buffered between decode, processing and encode stages; "
+                "0 disables pipelining")
         ;
 
         po::options_description encoder_opts("Encoder options");

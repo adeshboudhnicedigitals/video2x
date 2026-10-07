@@ -10,6 +10,7 @@ extern "C" {
 }
 
 #include "avutils.h"
+#include "bounded_queue.h"
 #include "decoder.h"
 #include "encoder.h"
 #include "libvideo2x_export.h"
@@ -26,6 +27,14 @@ enum class VideoProcessorState {
     Completed
 };
 
+using FramePtr = std::unique_ptr<AVFrame, decltype(&avutils::av_frame_deleter)>;
+
+// A frame waiting to be encoded, with the output index the encoder needs
+struct EncodeItem {
+    FramePtr frame;
+    int64_t idx;
+};
+
 class LIBVIDEO2X_API VideoProcessor {
    public:
     VideoProcessor(
@@ -33,7 +42,8 @@ class LIBVIDEO2X_API VideoProcessor {
         const encoder::EncoderConfig enc_cfg,
         const uint32_t vk_device_idx = 0,
         const AVHWDeviceType hw_device_type = AV_HWDEVICE_TYPE_NONE,
-        const bool benchmark = false
+        const bool benchmark = false,
+        const int queue_size = 4
     );
 
     virtual ~VideoProcessor() = default;
@@ -54,6 +64,24 @@ class LIBVIDEO2X_API VideoProcessor {
         decoder::Decoder& decoder,
         encoder::Encoder& encoder,
         std::unique_ptr<processors::Processor>& processor
+    );
+
+    [[nodiscard]] int process_frames_serial(
+        decoder::Decoder& decoder,
+        encoder::Encoder& encoder,
+        std::unique_ptr<processors::Processor>& processor
+    );
+
+    [[nodiscard]] int process_frames_pipelined(
+        decoder::Decoder& decoder,
+        encoder::Encoder& encoder,
+        std::unique_ptr<processors::Processor>& processor
+    );
+
+    void init_total_frames(
+        AVFormatContext* ifmt_ctx,
+        int in_vstream_idx,
+        const processors::Processor& processor
     );
 
     [[nodiscard]] int write_frame(AVFrame* frame, encoder::Encoder& encoder);
@@ -78,6 +106,8 @@ class LIBVIDEO2X_API VideoProcessor {
     uint32_t vk_device_idx_ = 0;
     AVHWDeviceType hw_device_type_ = AV_HWDEVICE_TYPE_NONE;
     bool benchmark_ = false;
+    int queue_size_ = 4;
+    BoundedQueue<EncodeItem>* out_queue_ = nullptr;
 
     std::atomic<VideoProcessorState> state_ = VideoProcessorState::Idle;
     std::atomic<int64_t> frame_idx_ = 0;

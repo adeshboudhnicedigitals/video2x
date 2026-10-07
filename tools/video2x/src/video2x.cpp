@@ -83,7 +83,12 @@ int main(int argc, char** argv) {
 
     // Create video processor object
     video2x::VideoProcessor video_processor = video2x::VideoProcessor(
-        proc_cfg, enc_cfg, arguments.vk_device_index, arguments.hw_device_type, arguments.benchmark
+        proc_cfg,
+        enc_cfg,
+        arguments.vk_device_index,
+        arguments.hw_device_type,
+        arguments.benchmark,
+        arguments.queue_size
     );
 
     // Create a thread for video processing

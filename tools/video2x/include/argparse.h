@@ -11,6 +11,7 @@ struct Arguments {
     uint32_t vk_device_index = 0;
     AVHWDeviceType hw_device_type = AV_HWDEVICE_TYPE_NONE;
     bool benchmark = false;
+    int queue_size = 4;
 };
 
 [[nodiscard]] int parse_args(

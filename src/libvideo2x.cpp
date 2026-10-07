@@ -20,13 +20,15 @@ VideoProcessor::VideoProcessor(
     const encoder::EncoderConfig enc_cfg,
     const uint32_t vk_device_idx,
     const AVHWDeviceType hw_device_type,
-    const bool benchmark
+    const bool benchmark,
+    const int queue_size
 )
     : proc_cfg_(proc_cfg),
       enc_cfg_(enc_cfg),
       vk_device_idx_(vk_device_idx),
       hw_device_type_(hw_device_type),
-      benchmark_(benchmark) {}
+      benchmark_(benchmark),
+      queue_size_(queue_size) {}
 
 [[gnu::target_clones("arch=x86-64-v4", "arch=x86-64-v3", "default")]]
 int VideoProcessor::process(
@@ -138,8 +140,51 @@ int VideoProcessor::process(
     return 0;
 }
 
-// Process frames using the selected filter.
+void VideoProcessor::init_total_frames(
+    AVFormatContext* ifmt_ctx,
+    int in_vstream_idx,
+    const processors::Processor& processor
+) {
+    // Set the total number of frames in the VideoProcessingContext
+    logger()->debug("Estimating the total number of frames to process");
+    total_frames_ = avutils::get_video_frame_count(ifmt_ctx, in_vstream_idx);
+
+    if (total_frames_ <= 0) {
+        logger()->warn("Unable to determine the total number of frames");
+        total_frames_ = 0;
+    } else {
+        logger()->debug("{} frames to process", total_frames_.load());
+    }
+
+    // Set total frames for interpolation
+    if (processor.get_processing_mode() == processors::ProcessingMode::Interpolate) {
+        total_frames_.store(total_frames_.load() * proc_cfg_.frm_rate_mul);
+    }
+}
+
+// Process frames, pipelined across threads unless queue_size_ is 0.
 int VideoProcessor::process_frames(
+    decoder::Decoder& decoder,
+    encoder::Encoder& encoder,
+    std::unique_ptr<processors::Processor>& processor
+) {
+    if (queue_size_ > 0) {
+        return process_frames_pipelined(decoder, encoder, processor);
+    }
+    return process_frames_serial(decoder, encoder, processor);
+}
+
+int VideoProcessor::process_frames_pipelined(
+    decoder::Decoder& decoder,
+    encoder::Encoder& encoder,
+    std::unique_ptr<processors::Processor>& processor
+) {
+    // Implemented in the next task; run serially until then
+    return process_frames_serial(decoder, encoder, processor);
+}
+
+// Process frames using the selected filter.
+int VideoProcessor::process_frames_serial(
     decoder::Decoder& decoder,
     encoder::Encoder& encoder,
     std::unique_ptr<processors::Processor>& processor
@@ -178,21 +223,7 @@ int VideoProcessor::process_frames(
         return AVERROR(ENOMEM);
     }
 
-    // Set the total number of frames in the VideoProcessingContext
-    logger()->debug("Estimating the total number of frames to process");
-    total_frames_ = avutils::get_video_frame_count(ifmt_ctx, in_vstream_idx);
-
-    if (total_frames_ <= 0) {
-        logger()->warn("Unable to determine the total number of frames");
-        total_frames_ = 0;
-    } else {
-        logger()->debug("{} frames to process", total_frames_.load());
-    }
-
-    // Set total frames for interpolation
-    if (processor->get_processing_mode() == processors::ProcessingMode::Interpolate) {
-        total_frames_.store(total_frames_.load() * proc_cfg_.frm_rate_mul);
-    }
+    init_total_frames(ifmt_ctx, in_vstream_idx, *processor);
 
     // Read frames from the input file
     while (state_.load() != VideoProcessorState::Aborted) {
