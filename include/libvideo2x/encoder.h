@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <mutex>
 #include <vector>
 
 extern "C" {
@@ -68,6 +69,10 @@ class Encoder {
     int write_frame(AVFrame* frame, int64_t frame_idx);
     int flush();
 
+    // Rescales and muxes an audio/subtitle packet; safe to call while another
+    // thread is encoding video frames
+    int write_raw_packet(AVPacket* packet, AVFormatContext* ifmt_ctx);
+
     AVCodecContext* get_encoder_context() const;
     AVFormatContext* get_format_context() const;
     int* get_stream_map() const;
@@ -79,6 +84,7 @@ class Encoder {
     AVCodecContext* enc_ctx_;
     int out_vstream_idx_;
     int* stream_map_;
+    std::mutex mux_mutex_;
 };
 
 }  // namespace encoder

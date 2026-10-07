@@ -151,7 +151,6 @@ int VideoProcessor::process_frames(
     AVFormatContext* ifmt_ctx = decoder.get_format_context();
     AVCodecContext* dec_ctx = decoder.get_codec_context();
     int in_vstream_idx = decoder.get_video_stream_index();
-    AVFormatContext* ofmt_ctx = encoder.get_format_context();
     AVCodecContext* enc_ctx = encoder.get_encoder_context();
     int* stream_map = encoder.get_stream_map();
 
@@ -268,7 +267,7 @@ int VideoProcessor::process_frames(
             }
         } else if ((enc_cfg_.copy_audio_streams || enc_cfg_.copy_subtitle_streams) &&
                    stream_map[packet->stream_index] >= 0) {
-            ret = write_raw_packet(packet.get(), ifmt_ctx, ofmt_ctx, stream_map);
+            ret = encoder.write_raw_packet(packet.get(), ifmt_ctx);
             if (ret < 0) {
                 return ret;
             }
@@ -321,30 +320,6 @@ int VideoProcessor::write_frame(AVFrame* frame, encoder::Encoder& encoder) {
             av_strerror(ret, errbuf, sizeof(errbuf));
             logger()->critical("Error encoding/writing frame: {}", errbuf);
         }
-    }
-    return ret;
-}
-
-int VideoProcessor::write_raw_packet(
-    AVPacket* packet,
-    AVFormatContext* ifmt_ctx,
-    AVFormatContext* ofmt_ctx,
-    int* stream_map
-) {
-    char errbuf[AV_ERROR_MAX_STRING_SIZE];
-    int ret = 0;
-
-    AVStream* in_stream = ifmt_ctx->streams[packet->stream_index];
-    int out_stream_idx = stream_map[packet->stream_index];
-    AVStream* out_stream = ofmt_ctx->streams[out_stream_idx];
-
-    av_packet_rescale_ts(packet, in_stream->time_base, out_stream->time_base);
-    packet->stream_index = out_stream_idx;
-
-    ret = av_interleaved_write_frame(ofmt_ctx, packet);
-    if (ret < 0) {
-        av_strerror(ret, errbuf, sizeof(errbuf));
-        logger()->critical("Error muxing audio/subtitle packet: {}", errbuf);
     }
     return ret;
 }

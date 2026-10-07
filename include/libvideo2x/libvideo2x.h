@@ -58,13 +58,6 @@ class LIBVIDEO2X_API VideoProcessor {
 
     [[nodiscard]] int write_frame(AVFrame* frame, encoder::Encoder& encoder);
 
-    [[nodiscard]] inline int write_raw_packet(
-        AVPacket* packet,
-        AVFormatContext* ifmt_ctx,
-        AVFormatContext* ofmt_ctx,
-        int* stream_map
-    );
-
     [[nodiscard]] inline int process_filtering(
         std::unique_ptr<processors::Processor>& processor,
         encoder::Encoder& encoder,

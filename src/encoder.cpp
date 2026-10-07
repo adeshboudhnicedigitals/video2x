@@ -344,7 +344,10 @@ int Encoder::write_frame(AVFrame* frame, int64_t frame_idx) {
         enc_pkt->stream_index = out_vstream_idx_;
 
         // Write the packet
-        ret = av_interleaved_write_frame(ofmt_ctx_, enc_pkt);
+        {
+            std::lock_guard<std::mutex> lock(mux_mutex_);
+            ret = av_interleaved_write_frame(ofmt_ctx_, enc_pkt);
+        }
         av_packet_unref(enc_pkt);
         if (ret < 0) {
             logger()->error("Error muxing packet");
@@ -393,7 +396,10 @@ int Encoder::flush() {
         enc_pkt->stream_index = out_vstream_idx_;
 
         // Write the packet
-        ret = av_interleaved_write_frame(ofmt_ctx_, enc_pkt);
+        {
+            std::lock_guard<std::mutex> lock(mux_mutex_);
+            ret = av_interleaved_write_frame(ofmt_ctx_, enc_pkt);
+        }
         av_packet_unref(enc_pkt);
         if (ret < 0) {
             logger()->error("Error muxing packet during flush");
@@ -404,6 +410,28 @@ int Encoder::flush() {
 
     av_packet_free(&enc_pkt);
     return 0;
+}
+
+int Encoder::write_raw_packet(AVPacket* packet, AVFormatContext* ifmt_ctx) {
+    char errbuf[AV_ERROR_MAX_STRING_SIZE];
+
+    AVStream* in_stream = ifmt_ctx->streams[packet->stream_index];
+    int out_stream_idx = stream_map_[packet->stream_index];
+    AVStream* out_stream = ofmt_ctx_->streams[out_stream_idx];
+
+    av_packet_rescale_ts(packet, in_stream->time_base, out_stream->time_base);
+    packet->stream_index = out_stream_idx;
+
+    int ret;
+    {
+        std::lock_guard<std::mutex> lock(mux_mutex_);
+        ret = av_interleaved_write_frame(ofmt_ctx_, packet);
+    }
+    if (ret < 0) {
+        av_strerror(ret, errbuf, sizeof(errbuf));
+        logger()->critical("Error muxing audio/subtitle packet: {}", errbuf);
+    }
+    return ret;
 }
 
 AVCodecContext* Encoder::get_encoder_context() const {
