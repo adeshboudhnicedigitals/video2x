@@ -257,11 +257,48 @@ int VideoProcessor::process_frames_pipelined(
             return;
         }
 
+        // Sends a packet (nullptr to flush) to the decoder and queues every frame it returns
+        // Returns false if decoding must stop
+        auto decode_packet = [&](AVPacket* pkt) {
+            int dec_ret = avcodec_send_packet(dec_ctx, pkt);
+            if (dec_ret < 0) {
+                av_strerror(dec_ret, err, sizeof(err));
+                logger()->critical("Error sending packet to decoder: {}", err);
+                ps.fail(dec_ret);
+                return false;
+            }
+
+            while (true) {
+                dec_ret = avcodec_receive_frame(dec_ctx, frame.get());
+                if (dec_ret == AVERROR(EAGAIN) || dec_ret == AVERROR_EOF) {
+                    return true;
+                } else if (dec_ret < 0) {
+                    av_strerror(dec_ret, err, sizeof(err));
+                    logger()->critical("Error decoding video frame: {}", err);
+                    ps.fail(dec_ret);
+                    return false;
+                }
+
+                // Move the decoded frame into its own AVFrame for the queue
+                FramePtr decoded(av_frame_alloc(), &avutils::av_frame_deleter);
+                if (decoded == nullptr) {
+                    ps.fail(AVERROR(ENOMEM));
+                    return false;
+                }
+                av_frame_move_ref(decoded.get(), frame.get());
+                if (!ps.decoded.push(std::move(decoded))) {
+                    return false;
+                }
+            }
+        };
+
         while (state_.load() != VideoProcessorState::Aborted && !ps.failed.load()) {
             int dec_ret = av_read_frame(ifmt_ctx, packet.get());
             if (dec_ret < 0) {
                 if (dec_ret == AVERROR_EOF) {
                     logger()->debug("Reached end of file");
+                    // Flush the frames the decoder is still holding
+                    decode_packet(nullptr);
                     break;
                 }
                 av_strerror(dec_ret, err, sizeof(err));
@@ -271,42 +308,13 @@ int VideoProcessor::process_frames_pipelined(
             }
 
             if (packet->stream_index == in_vstream_idx) {
-                dec_ret = avcodec_send_packet(dec_ctx, packet.get());
-                if (dec_ret < 0) {
-                    av_strerror(dec_ret, err, sizeof(err));
-                    logger()->critical("Error sending packet to decoder: {}", err);
-                    ps.fail(dec_ret);
+                if (!decode_packet(packet.get())) {
                     break;
                 }
-
-                bool queue_open = true;
-                while (queue_open) {
-                    dec_ret = avcodec_receive_frame(dec_ctx, frame.get());
-                    if (dec_ret == AVERROR(EAGAIN)) {
-                        break;
-                    } else if (dec_ret < 0) {
-                        av_strerror(dec_ret, err, sizeof(err));
-                        logger()->critical("Error decoding video frame: {}", err);
-                        ps.fail(dec_ret);
-                        queue_open = false;
-                        break;
-                    }
-
-                    // Move the decoded frame into its own AVFrame for the queue
-                    FramePtr decoded(av_frame_alloc(), &avutils::av_frame_deleter);
-                    if (decoded == nullptr) {
-                        ps.fail(AVERROR(ENOMEM));
-                        queue_open = false;
-                        break;
-                    }
-                    av_frame_move_ref(decoded.get(), frame.get());
-                    queue_open = ps.decoded.push(std::move(decoded));
-                }
-                if (!queue_open) {
-                    break;
-                }
-            } else if ((enc_cfg_.copy_audio_streams || enc_cfg_.copy_subtitle_streams) &&
-                       stream_map[packet->stream_index] >= 0) {
+            } else if (
+                (enc_cfg_.copy_audio_streams || enc_cfg_.copy_subtitle_streams) &&
+                stream_map[packet->stream_index] >= 0
+            ) {
                 dec_ret = encoder.write_raw_packet(packet.get(), ifmt_ctx);
                 if (dec_ret < 0) {
                     ps.fail(dec_ret);
@@ -398,8 +406,7 @@ int VideoProcessor::process_frames_pipelined(
 
         // Calculate this frame's presentation timestamp (PTS)
         if (enc_cfg_.recalculate_pts) {
-            frame->pts =
-                av_rescale_q(frame_idx_, av_inv_q(enc_ctx->framerate), enc_ctx->time_base);
+            frame->pts = av_rescale_q(frame_idx_, av_inv_q(enc_ctx->framerate), enc_ctx->time_base);
         }
 
         // Process the frame based on the selected processing mode
@@ -510,21 +517,24 @@ int VideoProcessor::process_frames_serial(
     init_total_frames(ifmt_ctx, in_vstream_idx, *processor);
 
     // Read frames from the input file
+    // At the end of the file the decoder is flushed to get the frames it is still holding
+    bool flushing = false;
     while (state_.load() != VideoProcessorState::Aborted) {
         ret = av_read_frame(ifmt_ctx, packet.get());
         if (ret < 0) {
             if (ret == AVERROR_EOF) {
                 logger()->debug("Reached end of file");
-                break;
+                flushing = true;
+            } else {
+                av_strerror(ret, errbuf, sizeof(errbuf));
+                logger()->critical("Error reading packet: {}", errbuf);
+                return ret;
             }
-            av_strerror(ret, errbuf, sizeof(errbuf));
-            logger()->critical("Error reading packet: {}", errbuf);
-            return ret;
         }
 
-        if (packet->stream_index == in_vstream_idx) {
+        if (flushing || packet->stream_index == in_vstream_idx) {
             // Send the packet to the decoder for decoding
-            ret = avcodec_send_packet(dec_ctx, packet.get());
+            ret = avcodec_send_packet(dec_ctx, flushing ? nullptr : packet.get());
             if (ret < 0) {
                 av_strerror(ret, errbuf, sizeof(errbuf));
                 logger()->critical("Error sending packet to decoder: {}", errbuf);
@@ -541,7 +551,7 @@ int VideoProcessor::process_frames_serial(
 
                 // Receive the decoded frame from the decoder
                 ret = avcodec_receive_frame(dec_ctx, frame.get());
-                if (ret == AVERROR(EAGAIN)) {
+                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
                     // No more frames from this packet
                     break;
                 } else if (ret < 0) {
@@ -580,12 +590,17 @@ int VideoProcessor::process_frames_serial(
                 frame_idx_.fetch_add(1);
                 logger()->debug("Processed frame {}/{}", frame_idx_.load(), total_frames_.load());
             }
-        } else if ((enc_cfg_.copy_audio_streams || enc_cfg_.copy_subtitle_streams) &&
-                   stream_map[packet->stream_index] >= 0) {
+        } else if (
+            (enc_cfg_.copy_audio_streams || enc_cfg_.copy_subtitle_streams) &&
+            stream_map[packet->stream_index] >= 0
+        ) {
             ret = encoder.write_raw_packet(packet.get(), ifmt_ctx);
             if (ret < 0) {
                 return ret;
             }
+        }
+        if (flushing) {
+            break;
         }
         av_packet_unref(packet.get());
     }
