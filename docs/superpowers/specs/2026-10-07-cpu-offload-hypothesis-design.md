@@ -1,6 +1,6 @@
 # CPU offload: hypothesis test, swscale cache, NVENC
 
-Status: draft. Nothing here is built. Test the hypothesis first, then decide what to build.
+Status: closed, nothing built. Measured on 2026-10-07 (Colab T4, 1080p x2 to 4K, 147 frames): A 1.35 fps, B 1.31, C 1.26, D failed (`Invalid encoder 'hevc_nvenc'`). B reaches 97% of A, so by the decision rule below neither option is built. The GPU was under its software power cap in 190 of 201 monitor samples. Results are also in `HANDOFF.md` section 4.
 
 Scope: 1080p output only (see `HANDOFF.md`). 1440p, 4K and 8K are out of scope.
 
