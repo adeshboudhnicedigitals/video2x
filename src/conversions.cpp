@@ -109,8 +109,11 @@ ncnn::Mat avframe_to_ncnn_mat(AVFrame* frame) {
 
 // Convert ncnn::Mat to AVFrame with a specified pixel format (this part is unchanged)
 [[gnu::target_clones("arch=x86-64-v4", "arch=x86-64-v3", "default")]]
-AVFrame* ncnn_mat_to_avframe(const ncnn::Mat& mat, AVPixelFormat pix_fmt) {
+AVFrame* ncnn_mat_to_avframe(const ncnn::Mat& mat, AVPixelFormat pix_fmt, int width, int height) {
     int ret;
+
+    // Resize only if a different target size is requested
+    bool resize = width > 0 && height > 0 && (width != mat.w || height != mat.h);
 
     // Step 1: Allocate a destination AVFrame for the specified pixel format
     AVFrame* dst_frame = av_frame_alloc();
@@ -120,8 +123,8 @@ AVFrame* ncnn_mat_to_avframe(const ncnn::Mat& mat, AVPixelFormat pix_fmt) {
     }
 
     dst_frame->format = pix_fmt;
-    dst_frame->width = mat.w;
-    dst_frame->height = mat.h;
+    dst_frame->width = resize ? width : mat.w;
+    dst_frame->height = resize ? height : mat.h;
 
     // Allocate memory for the frame buffer
     if (av_frame_get_buffer(dst_frame, 32) < 0) {
@@ -167,7 +170,7 @@ AVFrame* ncnn_mat_to_avframe(const ncnn::Mat& mat, AVPixelFormat pix_fmt) {
         dst_frame->width,
         dst_frame->height,
         pix_fmt,
-        SWS_BILINEAR,
+        resize ? SWS_LANCZOS | SWS_ACCURATE_RND | SWS_FULL_CHR_H_INT : SWS_BILINEAR,
         nullptr,
         nullptr,
         nullptr

@@ -53,6 +53,8 @@ class FilterRealesrgan : public Filter {
     AVRational in_time_base_;
     AVRational out_time_base_;
     AVPixelFormat out_pix_fmt_;
+    int out_width_ = 0;
+    int out_height_ = 0;
 };
 
 }  // namespace processors

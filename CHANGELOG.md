@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Pipelined decoding, processing, and encoding on separate threads, with the `--queue-size` option (`0` disables it).
 - Option to recalculate the PTS.
+- `--width` and `--height` for Real-ESRGAN and Real-CUGAN: the upscaled frame is resized (Lanczos) to the requested size before encoding. With only one of them set, the other keeps the aspect ratio.
 - Real-ESRGAN models `realesr-general-x4v3` and `realesr-general-wdn-x4v3` (#1319).
 - (Video2X Qt6) Korean translation.
 

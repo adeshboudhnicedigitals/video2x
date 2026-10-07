@@ -84,6 +84,38 @@ class Filter : public Processor {
    public:
     ProcessingMode get_processing_mode() const override { return ProcessingMode::Filter; }
     virtual int filter(AVFrame* in_frame, AVFrame** out_frame) = 0;
+
+   protected:
+    // Output size for a filter with a fixed integer scale: the scaled size, unless the
+    // configuration asks for a width and/or height. If only one of them is set, the other
+    // one keeps the aspect ratio and is rounded to an even number.
+    static void scaled_output_dimensions(
+        const ProcessorConfig& proc_cfg,
+        int in_width,
+        int in_height,
+        int scale,
+        int& width,
+        int& height
+    ) {
+        width = in_width * scale;
+        height = in_height * scale;
+        if (proc_cfg.width > 0 && proc_cfg.height > 0) {
+            width = proc_cfg.width;
+            height = proc_cfg.height;
+        } else if (proc_cfg.height > 0 && in_height > 0) {
+            width = static_cast<int>(
+                        static_cast<double>(in_width) * proc_cfg.height / in_height / 2.0 + 0.5
+                    ) *
+                    2;
+            height = proc_cfg.height;
+        } else if (proc_cfg.width > 0 && in_width > 0) {
+            height = static_cast<int>(
+                         static_cast<double>(in_height) * proc_cfg.width / in_width / 2.0 + 0.5
+                     ) *
+                     2;
+            width = proc_cfg.width;
+        }
+    }
 };
 
 // Abstract base class for interpolators

@@ -134,9 +134,9 @@ int parse_args(
         po::options_description upscale_opts("Upscaling options");
         upscale_opts.add_options()
             ("width,w", po::value<int>(&proc_cfg.width)
-                ->notifier([](int v) { validate_greater_equal_one(v, "width"); }), "Output width")
+                ->notifier([](int v) { validate_greater_equal_one(v, "width"); }), "Output width (Real-ESRGAN and Real-CUGAN resize the upscaled frame to it)")
             ("height,h", po::value<int>(&proc_cfg.height)
-                ->notifier([](int v) { validate_greater_equal_one(v, "height"); }), "Output height")
+                ->notifier([](int v) { validate_greater_equal_one(v, "height"); }), "Output height (Real-ESRGAN and Real-CUGAN resize the upscaled frame to it)")
             ("scaling-factor,s", po::value<int>(&proc_cfg.scaling_factor)
                 ->notifier([](int v) { validate_min(v, "scaling-factor", 2); }), "Scaling factor")
             ("noise-level,n", po::value<int>(&proc_cfg.noise_level)

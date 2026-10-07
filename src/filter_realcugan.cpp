@@ -88,6 +88,8 @@ int FilterRealcugan::init(AVCodecContext* dec_ctx, AVCodecContext* enc_ctx, AVBu
     in_time_base_ = dec_ctx->time_base;
     out_time_base_ = enc_ctx->time_base;
     out_pix_fmt_ = enc_ctx->pix_fmt;
+    out_width_ = enc_ctx->width;
+    out_height_ = enc_ctx->height;
 
     // Load the model
     if (realcugan_->load(model_param_full_path.value(), model_bin_full_path.value()) != 0) {
@@ -182,8 +184,8 @@ int FilterRealcugan::filter(AVFrame* in_frame, AVFrame** out_frame) {
         return ret;
     }
 
-    // Convert ncnn::Mat to AVFrame
-    *out_frame = conversions::ncnn_mat_to_avframe(out_mat, out_pix_fmt_);
+    // Convert ncnn::Mat to AVFrame, resizing to the encoder's size if it differs
+    *out_frame = conversions::ncnn_mat_to_avframe(out_mat, out_pix_fmt_, out_width_, out_height_);
     if (*out_frame == nullptr) {
         logger()->error("Failed to convert ncnn::Mat to AVFrame");
         return AVERROR(ENOMEM);
@@ -197,14 +199,13 @@ int FilterRealcugan::filter(AVFrame* in_frame, AVFrame** out_frame) {
 }
 
 void FilterRealcugan::get_output_dimensions(
-    const ProcessorConfig&,
+    const ProcessorConfig& proc_cfg,
     int in_width,
     int in_height,
     int& out_width,
     int& out_height
 ) const {
-    out_width = in_width * scaling_factor_;
-    out_height = in_height * scaling_factor_;
+    scaled_output_dimensions(proc_cfg, in_width, in_height, scaling_factor_, out_width, out_height);
 }
 
 }  // namespace processors
