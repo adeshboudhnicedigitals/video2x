@@ -18,13 +18,15 @@ FilterRealesrgan::FilterRealesrgan(
     bool tta_mode,
     int scaling_factor,
     int noise_level,
-    const fsutils::StringType model_name
+    const fsutils::StringType model_name,
+    int tile_size
 )
     : realesrgan_(nullptr),
       gpuid_(gpuid),
       tta_mode_(tta_mode),
       scaling_factor_(scaling_factor),
       noise_level_(noise_level),
+      tile_size_(tile_size),
       model_name_(std::move(model_name)) {}
 
 FilterRealesrgan::~FilterRealesrgan() {
@@ -88,9 +90,11 @@ int FilterRealesrgan::init(AVCodecContext* dec_ctx, AVCodecContext* enc_ctx, AVB
     realesrgan_->scale = scaling_factor_;
     realesrgan_->prepadding = 10;
 
-    // Calculate tilesize based on GPU heap budget
+    // Use the requested tile size, or calculate one based on GPU heap budget
     uint32_t heap_budget = ncnn::get_gpu_device(gpuid_)->get_heap_budget();
-    if (heap_budget > 1900) {
+    if (tile_size_ > 0) {
+        realesrgan_->tilesize = tile_size_;
+    } else if (heap_budget > 1900) {
         realesrgan_->tilesize = 200;
     } else if (heap_budget > 550) {
         realesrgan_->tilesize = 100;
@@ -99,6 +103,7 @@ int FilterRealesrgan::init(AVCodecContext* dec_ctx, AVCodecContext* enc_ctx, AVB
     } else {
         realesrgan_->tilesize = 32;
     }
+    logger()->info("Real-ESRGAN tile size: {}", realesrgan_->tilesize);
 
     return 0;
 }

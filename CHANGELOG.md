@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Pipelined decoding, processing, and encoding on separate threads, with the `--queue-size` option (`0` disables it).
 - Option to recalculate the PTS.
+- `--realesrgan-tile-size` option to set the Real-ESRGAN tile size (`0` keeps the automatic choice).
 - `--width` and `--height` for Real-ESRGAN and Real-CUGAN: the upscaled frame is resized (Lanczos) to the requested size before encoding. With only one of them set, the other keeps the aspect ratio.
 - Real-ESRGAN models `realesr-general-x4v3` and `realesr-general-wdn-x4v3` (#1319).
 - (Video2X Qt6) Korean translation.
@@ -21,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Last frames of a video being dropped because the decoder was not flushed at the end of the input.
 - Null pointer dereference in Real-ESRGAN, Real-CUGAN, and RIFE processors when frame conversion fails.
 - Vulkan hardware device context leak on error paths in libplacebo filter initialization.
 - Incorrect spdlog format string using printf-style specifiers instead of fmt-style placeholders.

@@ -33,6 +33,8 @@ struct LibplaceboConfig {
 
 struct RealESRGANConfig {
     bool tta_mode = false;
+    // Tile size in pixels; 0 picks one from the GPU's memory budget
+    int tile_size = 0;
     fsutils::StringType model_name;
 };
 

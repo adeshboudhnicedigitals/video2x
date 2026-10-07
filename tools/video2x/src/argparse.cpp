@@ -169,6 +169,9 @@ int parse_args(
                 ->notifier(validate_realesrgan_model_name),
                 "Name of the Real-ESRGAN model to use (realesr-animevideov3, "
                 "realesrgan-plus-anime, realesrgan-plus, realesr-generalv3)")
+            ("realesrgan-tile-size", po::value<int>()->default_value(0),
+                "Tile size in pixels (0=auto from GPU memory; larger tiles have less overlap "
+                "but use more VRAM)")
         ;
 
         po::options_description realcugan_opts("Real-CUGAN options");
@@ -411,6 +414,13 @@ int parse_args(
                 proc_cfg.processor_type = video2x::processors::ProcessorType::RealESRGAN;
                 video2x::processors::RealESRGANConfig realesrgan_config;
                 realesrgan_config.tta_mode = false;
+                realesrgan_config.tile_size = vm["realesrgan-tile-size"].as<int>();
+                if (realesrgan_config.tile_size != 0 && realesrgan_config.tile_size < 32) {
+                    video2x::logger()->critical(
+                        "Tile size must be 0 (auto) or at least 32 for Real-ESRGAN."
+                    );
+                    return -1;
+                }
                 realesrgan_config.model_name =
                     vm["realesrgan-model"].as<video2x::fsutils::StringType>();
                 proc_cfg.config = realesrgan_config;

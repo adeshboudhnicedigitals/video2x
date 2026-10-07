@@ -92,7 +92,8 @@ void ProcessorFactory::init_default_processors(ProcessorFactory& factory) {
                 config.tta_mode,
                 proc_cfg.scaling_factor,
                 proc_cfg.noise_level,
-                config.model_name
+                config.model_name,
+                config.tile_size
             );
         }
     );
