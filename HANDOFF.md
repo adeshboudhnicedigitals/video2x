@@ -5,9 +5,9 @@ Read `CLAUDE.md` first for build commands and architecture; this file covers the
 
 ## 1. Who and what
 
-- The user owns the fork `https://github.com/adeshboudhnicedigitals/video2x` and **cannot push to upstream** (`k4yt3x/video2x`). Remote `origin` is upstream (never push there); remote `fork` is theirs (push there).
+- The user owns the fork `https://github.com/adeshboudhnicedigitals/video2x` and **cannot push to upstream** (`k4yt3x/video2x`). Remote `origin` is upstream (never push there); remote `fork` is theirs (push there). Check `git remote -v` first: on the Linux machine the clone has no `fork` remote and `origin` is the user's fork.
 - **Goal (current scope): 1080p output only, with the best picture quality we can get.** Clean, sharp and less blurry, "like modern anime", not like old anime. 4K and 8K are out of scope. 1440p ("2K") may be planned later, but nothing should be built or tuned for it now. Judge every change by 1080p output quality first, then by time to finish. The 4K/8K measurements in section 4 are kept as evidence about bottlenecks, not as targets. Their material is old (about 2008) anime episodes, for example Bleach. Their files are labelled 1080p (measured 1908x1080) but the content looks like an upscaled lower-resolution master. Picture quality matters more than raw speed, but runs must finish in reasonable time.
-- **Where it runs:** free Google Colab, Tesla T4, **2 vCPUs** (x264 picks 3 threads). Local machine is Windows with **no compiler, CMake, ffmpeg or GPU on PATH**, so nothing can be built locally. All building and testing happens on Colab.
+- **Where it runs:** free Google Colab, Tesla T4, **2 vCPUs** (x264 picks 3 threads). Local machine is Windows with **no compiler, CMake, ffmpeg or GPU on PATH**, so nothing can be built locally. All building and testing happens on Colab. A second machine (Linux, i5-10210U, Intel UHD iGPU, NVIDIA MX130 with no working driver) does build it: static build with bundled deps into `build/video2x-install`, run with `LD_LIBRARY_PATH=build/video2x-install/lib`. There libplacebo runs (0.70 fps at 1080p to 4K, GPU-bound) but Real-ESRGAN hangs at frame 0 on the Intel Vulkan driver (cause not found), so model tests still need Colab.
 - The user prefers short, direct answers and wants to be asked before outward-facing actions (pushing, publishing).
 
 ## 2. Git state
@@ -40,20 +40,22 @@ Decode, GPU processing and encode now run on separate threads joined by bounded 
 
 ### 3.2 Colab notebook `Video2X.ipynb` (repo root)
 
-Based on the upstream notebook and edited with Python/JSON scripts. Cells, in order:
+Based on the upstream notebook and edited with Python/JSON scripts. It has no Colab form fields: every setting is a plain Python variable near the top of its cell. Cells, in order:
 
 | Cell | Purpose |
 |---|---|
-| Step 0 | GPU check (`nvidia-smi`), unchanged |
-| Step 1 | **Builds Video2X from source** (fork URL and branch are form fields), instead of installing the 6.2.0 `.deb`; ~10-20 min the first time |
-| Step 2 | Picks/uploads an input from Colab local disk `/content` (no Google Drive); custom path override; `output_dir` defaults to `/content/output`. **Local files vanish when the runtime resets** |
-| Step 2B | Optional background monitor (GPU clocks, temperature, power, throttle reasons, RAM, video2x memory, CPU load) writing `/content/monitor.csv` |
-| Step 3A | Upscale with `video2x`. Processors: `realesrgan`, `realcugan` (model `models-se/pro/nose`, noise `conservative/none/1/2/3`), `libplacebo`. Has `shrink_first_height` (0 = off; e.g. 720 makes a temporary Lanczos-shrunk copy, keeps audio/subtitles, deletes it afterwards) and `queue_size`. Validates scale/noise combinations the models actually have before running. Defaults: `realesr-animevideov3`, scale 2, `libx264 veryfast crf 20`, libplacebo size 1920x1080 (these match the settings used in the tests; upstream's notebook had scale 4, `slow`, 3840x2160) |
-| Step 3D | **Model comparison**: runs animevideov3, Real-CUGAN (conservative / denoise 1 / optional 3) and animevideov3-from-720p on a short sample and shows the same frame side by side with timings; saves `/content/output/model_comparison.png` |
-| Step 3C | Serial (`--queue-size 0`) vs pipelined speed on a short clip, plus frame-hash comparison |
-| Step 3B | Frame interpolation (RIFE), marked broken on Colab upstream |
-| Step 4 | Results and plots for the Step 2B monitor |
-| Step 5A/5B/5C | Experimental: PyTorch/CUDA feasibility test of the same network (raw speed, then end-to-end with ffmpeg); 5C has `mode`: `with encoding` / `no encoding` |
+| 1.1 | GPU check (`nvidia-smi`) |
+| 1.2 | **Builds Video2X from source** (`repo_url`, `branch`), instead of installing the 6.2.0 `.deb`; ~10-20 min the first time. Prints whether FFmpeg has NVENC encoders (it does on Colab: `h264_nvenc`, `hevc_nvenc`, `av1_nvenc`) |
+| 1.3 | Input file from Colab local disk `/content` (no Google Drive, no widgets): `input_path` ("" uses the only video found), `upload_new_file`, `output_dir` (default `/content/output`). **Local files vanish when the runtime resets** |
+| 1.4 | Optional background monitor (GPU clocks, temperature, power, throttle reasons, RAM, video2x memory, CPU load) writing `/content/monitor.csv` |
+| 2.1 | Upscale with `video2x`. Processors: `realesrgan`, `realcugan` (model `models-se/pro/nose`, noise `conservative/none/1/2/3`), `libplacebo`. Has `shrink_first_height` (0 = off; e.g. 720 makes a temporary Lanczos-shrunk copy, keeps audio/subtitles, deletes it afterwards), `queue_size`, `benchmark` (no encoding, throwaway output) and NVENC support (a `*_nvenc` codec uses `preset` p1-p7 and `crf` as `cq`). Validates scale/noise combinations the models actually have before running. Defaults: `realesr-animevideov3`, scale 2, `libx264 veryfast crf 20`, libplacebo size 1920x1080 |
+| 3.1 | **Speed test** (replaces the old serial-vs-pipelined cell): one short clip run four ways, A no encoding (`--benchmark`), B x264 pipelined, C x264 serial (`--queue-size 0`), D NVENC pipelined, after an untimed warm-up. Prints fps, wall time, frame counts, GPU clock/temperature/power per run, the B/C frame-hash comparison and x264 vs NVENC file sizes. This is the hypothesis test in `docs/superpowers/specs/2026-10-07-cpu-offload-hypothesis-design.md` |
+| 3.2 | **Model comparison**: runs animevideov3, Real-CUGAN (conservative / denoise 1 / optional 3) and animevideov3-from-720p on a short sample and shows the same frame side by side with timings; saves `/content/output/model_comparison.png` |
+| 3.3 | Results and plots for the 1.4 monitor |
+| 4.1 | Frame interpolation (RIFE), marked broken on Colab upstream |
+| 4.2-4.4 | Experimental: PyTorch/CUDA feasibility test of the same network at x4 (raw speed, then end-to-end with ffmpeg); 4.4 has `mode`: `with encoding` / `no encoding` |
+
+Older notes in this file use the previous step names: Step 0/1/2/2B are now 1.1-1.4, Step 3A is 2.1, Step 3C is 3.1, Step 3D is 3.2, Step 4 is 3.3, Step 3B is 4.1 and Steps 5A-5C are 4.2-4.4.
 
 Gotchas learned: Colab cells run one at a time, so Step 4 can only run after a job finishes; opening an updated notebook starts a fresh runtime (re-runs the whole build), so changed cells are best pasted into the live session; use `--noise-level=-1` (with `=`) because Boost can read a bare `-1` as an option; the summary line with average FPS is only printed at `--log-level info` or lower; clip cuts with `-c copy` snap to the previous keyframe.
 
