@@ -95,49 +95,66 @@ def main():
                      "this GPU. Use other --ncnn/--tile values (see bench.py), or --skip-picture-check to force.")
         print(f"  OK: {db:.1f} dB against the baseline")
 
-    # --- 1. Split ---
+    # --- 1. Split, streamed: workers start on each chunk as soon as ffmpeg has finished writing it ---
+    # Pulldown is still removed over the whole file in one pass, which keeps the joined video exactly
+    # as long as the audio; only the waiting is removed.
+    settings_file = src_dir / "split.settings"
     marker = src_dir / "split.done"
     settings = json.dumps({"input": str(source), "limit": args.limit_seconds, "chunk": args.chunk_seconds,
                            "pulldown": remove_pulldown, "precise": args.precise_split})
-    if not marker.exists() or marker.read_text() != settings:
-        for old in list(src_dir.glob("chunk_*.mkv")) + list(out_dir.glob("chunk_*")):
+    if not settings_file.exists() or settings_file.read_text() != settings:
+        # Different settings give different chunks, so earlier results are invalid
+        for old in list(src_dir.glob("chunk_*")) + list(out_dir.glob("chunk_*")):
             old.unlink()
         marker.unlink(missing_ok=True)
-        print("Splitting" + (" and removing pulldown" if remove_pulldown else "") + "...")
-        started = time.time()
-        result = common.run(common.split_command(source, src_dir / "chunk_%03d.mkv", args.chunk_seconds,
-                                                 args.limit_seconds, remove_pulldown, args.precise_split))
-        if result.returncode != 0:
-            sys.exit("Splitting failed:\n" + result.stderr[-1500:])
-        marker.write_text(settings)
-        print(f"  done in {time.time() - started:.0f} s")
-    chunks = sorted(src_dir.glob("chunk_*.mkv"))
-    if not chunks:
-        sys.exit("The split produced no chunks.")
-    lengths = {chunk: common.duration_of(chunk) for chunk in chunks}
-    total_seconds = sum(lengths.values())
-    print(f"{len(chunks)} chunks, {total_seconds / 60:.1f} min of video")
+        settings_file.write_text(settings)
+    split_process = None
+    if not marker.exists():
+        # A repeated split of the same input with the same settings gives the same chunks, so outputs
+        # that finished before an interruption stay valid
+        for old in src_dir.glob("chunk_*.mkv"):
+            old.unlink()
+        print("Splitting" + (" and removing pulldown" if remove_pulldown else "")
+              + "; workers start as soon as the first chunk is written...")
+        split_log = open(src_dir / "split.log", "w")
+        split_process = subprocess.Popen(
+            common.split_command(source, src_dir / "chunk_%03d.mkv", args.chunk_seconds, args.limit_seconds,
+                                 remove_pulldown, args.precise_split),
+            stdout=subprocess.DEVNULL, stderr=split_log)
+    total_seconds = min(common.duration_of(source), args.limit_seconds) if args.limit_seconds \
+        else common.duration_of(source)
 
     # --- 2. Workers ---
     todo = queue.Queue()
-    for chunk in chunks:
-        if not (out_dir / chunk.name).exists():
-            todo.put(chunk)
-    if len(chunks) - todo.qsize():
-        print(f"{len(chunks) - todo.qsize()} chunk(s) already finished; skipping them.")
-
     lock = threading.Lock()
     processes = []
-    state = {"done_frames": 0, "done_seconds": sum(lengths[c] for c in chunks if (out_dir / c.name).exists()),
-             "failed": [], "running": {}}
+    lengths = {}  # every complete chunk seen so far -> its duration
+    state = {"done_frames": 0, "done_seconds": 0.0, "fresh_seconds": 0.0, "failed": [], "running": {},
+             "split_done": False, "skipped": 0}
     env = common.env_with(ncnn)
+
+    def scan_chunks(final):
+        """Queue the chunks that ffmpeg has finished. While it runs, the newest file may still be open."""
+        files = sorted(src_dir.glob("chunk_*.mkv"))
+        for chunk in files if final else files[:-1]:
+            if chunk in lengths:
+                continue
+            lengths[chunk] = common.duration_of(chunk)
+            if (out_dir / chunk.name).exists():
+                with lock:
+                    state["done_seconds"] += lengths[chunk]
+                    state["skipped"] += 1
+            else:
+                todo.put(chunk)
 
     def worker(device, slot):
         while not state["failed"]:
             try:
-                chunk = todo.get_nowait()
+                chunk = todo.get(timeout=1)
             except queue.Empty:
-                return
+                if state["split_done"]:
+                    return
+                continue
             part = out_dir / (chunk.stem + ".partial.mkv")
             log = out_dir / (chunk.stem + ".log")
             part.unlink(missing_ok=True)
@@ -160,6 +177,7 @@ def main():
                 part.rename(out_dir / chunk.name)
                 with lock:
                     state["done_seconds"] += lengths[chunk]
+                    state["fresh_seconds"] += lengths[chunk]
                     state["done_frames"] += expected
             except Exception as error:  # noqa: BLE001 - report every failure and stop the others
                 with lock:
@@ -168,6 +186,11 @@ def main():
                 with lock:
                     state["running"].pop(f"{device}.{slot}", None)
 
+    if split_process is None:
+        scan_chunks(final=True)
+        state["split_done"] = True
+        print(f"{len(lengths)} chunks from an earlier split")
+
     threads = [threading.Thread(target=worker, args=(device, slot), daemon=True)
                for device in devices for slot in range(args.procs_per_gpu)]
     started = time.time()
@@ -175,17 +198,34 @@ def main():
         for thread in threads:
             thread.start()
         last = 0.0
-        while any(thread.is_alive() for thread in threads):
+        while not state["split_done"] or any(thread.is_alive() for thread in threads):
             time.sleep(2)
+            if not state["split_done"]:
+                if split_process.poll() is None:
+                    scan_chunks(final=False)
+                elif split_process.returncode != 0:
+                    split_log.close()
+                    state["failed"].append("Splitting failed:\n" + (src_dir / "split.log").read_text()[-1500:])
+                else:
+                    split_log.close()
+                    scan_chunks(final=True)
+                    marker.write_text(settings)
+                    state["split_done"] = True
+                    print(f"[{(time.time() - started) / 60:6.1f} min] split finished: {len(lengths)} chunks, "
+                          f"{sum(lengths.values()) / 60:.1f} min of video")
+            if state["failed"]:
+                break
             if time.time() - last >= 30:
                 last = time.time()
                 with lock:
                     done, frames, running = state["done_seconds"], state["done_frames"], dict(state["running"])
                 elapsed = time.time() - started
-                finished = sum(1 for c in chunks if (out_dir / c.name).exists())
+                finished = sum(1 for c in lengths if (out_dir / c.name).exists())
+                count = f"{len(lengths)}" if state["split_done"] else f"{len(lengths)}+ (splitting)"
                 rate = f", {frames / elapsed:.2f} fps" if frames else ""
-                eta = f", about {(total_seconds - done) / (done / elapsed) / 60:.0f} min left" if done and frames else ""
-                print(f"[{elapsed / 60:6.1f} min] {finished}/{len(chunks)} chunks{rate}{eta}; running {running}")
+                fresh = state["fresh_seconds"]  # video seconds finished in this run
+                eta = f", about {(total_seconds - done) / (fresh / elapsed) / 60:.0f} min left" if fresh else ""
+                print(f"[{elapsed / 60:6.1f} min] {finished}/{count} chunks{rate}{eta}; running {running}")
                 if shutil.which("nvidia-smi"):
                     gpus = common.run(["nvidia-smi", "--query-gpu=index,utilization.gpu,power.draw,clocks.sm,"
                                        "temperature.gpu", "--format=csv,noheader,nounits"]).stdout.strip()
@@ -194,15 +234,22 @@ def main():
         state["failed"].append(f"stopped by {type(error).__name__}: {error}")
     finally:
         if state["failed"]:
+            if split_process is not None and split_process.poll() is None:
+                split_process.terminate()
             for process in processes:
                 if process.poll() is None:
                     process.terminate()
     if state["failed"]:
         sys.exit("Stopped:\n" + "\n".join(state["failed"]))
+    if state["skipped"]:
+        print(f"{state['skipped']} chunk(s) were already finished and were skipped.")
     elapsed = time.time() - started
     if state["done_frames"]:
-        print(f"Upscaled {state['done_frames']} frames in {elapsed:.0f} s: {state['done_frames'] / elapsed:.2f} fps "
-              f"on {len(devices)} GPU(s) x {args.procs_per_gpu} process(es)")
+        print(f"Split, upscaled and encoded {state['done_frames']} frames in {elapsed:.0f} s: "
+              f"{state['done_frames'] / elapsed:.2f} fps on {len(devices)} GPU(s) x {args.procs_per_gpu} process(es)")
+    chunks = sorted(lengths)
+    if not chunks:
+        sys.exit("The split produced no chunks.")
 
     # --- 3. Join ---
     finished = [out_dir / chunk.name for chunk in chunks]

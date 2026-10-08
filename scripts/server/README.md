@@ -39,7 +39,8 @@ python3 ~/v2x/src/scripts/server/upscale.py episode.mkv --limit-seconds 60 --chu
 
 Defaults: `realesr-animevideov3` x2 resized to 1080p, tile 600, ncnn's own settings,
 x264 `slow` crf 18, 3:2 pulldown removed (`--no-remove-pulldown` for native 29.97/30 fps video),
-60 s chunks. Finished chunks are kept in `~/v2x/work/<name>/out`, so rerunning resumes. The result
+60 s chunks. The split runs in the background and workers start on each chunk as soon as it is
+written, so the GPU does not wait for the whole split. Finished chunks are kept in `~/v2x/work/<name>/out`, so rerunning resumes. The result
 is written to `~/v2x/work/<name>/<name>.1080p.mkv` (or `-o`).
 
 Before the job starts, `upscale.py` compares a few frames made with the chosen settings against a
