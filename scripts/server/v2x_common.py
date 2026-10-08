@@ -10,9 +10,16 @@ import threading
 # ncnn options read by the fork's patched Real-ESRGAN wrapper (patches/librealesrgan-ncnn-options.patch)
 NCNN_SWITCHES = ("VIDEO2X_NCNN_COOPMAT", "VIDEO2X_NCNN_FP16_ARITH", "VIDEO2X_NCNN_WINOGRAD")
 
-# Fastest settings measured on a T4 (docs/hypotheses.md, T20 and T21)
-BEST_NCNN = {"VIDEO2X_NCNN_WINOGRAD": "0", "VIDEO2X_NCNN_FP16_ARITH": "1"}
+# Fastest settings measured on a T4 (docs/hypotheses.md, T20 and T21). NOT safe everywhere:
+# on an RTX PRO 6000 Blackwell (driver 595) Winograd off corrupts every frame (T22), so the
+# scripts default to ncnn's own settings and check the picture before trusting any other setting.
+T4_NCNN = {"VIDEO2X_NCNN_WINOGRAD": "0", "VIDEO2X_NCNN_FP16_ARITH": "1"}
+DEFAULT_NCNN = {}
 DEFAULT_TILE = 600
+
+# Known-good baseline for picture checks: ncnn defaults and the automatic tile size
+SAFE_SETTINGS = {"ncnn": {}, "tile": 0}
+BROKEN_BELOW_DB = 40.0
 
 
 def run(cmd, check=False, **kwargs):
@@ -113,6 +120,48 @@ def split_command(source, destination_pattern, chunk_seconds, limit_seconds=0, r
         command += ["-c", "copy"]
     return command + ["-an", "-sn", "-f", "segment", "-segment_time", str(chunk_seconds),
                       "-reset_timestamps", "1", str(destination_pattern)]
+
+
+def psnr_db(first, second):
+    """Average PSNR between two videos of the same size, as a float (inf when identical, None on failure)."""
+    text = run(["ffmpeg", "-i", str(first), "-i", str(second), "-lavfi", "psnr", "-f", "null", "-"]).stderr
+    match = re.search(r"average:([0-9.]+|inf)", text)
+    if not match:
+        return None
+    return float("inf") if match.group(1) == "inf" else float(match.group(1))
+
+
+def lossless_run(source, destination, device, settings, scale=2, height=1080, model="realesr-animevideov3"):
+    """Upscale `source` losslessly with the given settings ({"ncnn": {...}, "tile": N}) and check the options used."""
+    destination.unlink(missing_ok=True)
+    command = video2x_command(source, destination, device, model, scale, height, int(settings.get("tile", 0)),
+                              codec=None, extra=["--codec", "libx264", "-e", "qp=0", "-e", "preset=ultrafast"])
+    result = run(command, env=env_with(settings.get("ncnn", {})))
+    check_ncnn_options(result.stdout + result.stderr, settings.get("ncnn", {}), str(destination.name))
+    if result.returncode != 0 and not destination.exists():
+        raise RuntimeError(f"video2x failed on {source}:\n{(result.stdout + result.stderr)[-1500:]}")
+    return destination
+
+
+def make_check_clip(source, destination, start, frames, remove_pulldown=True):
+    """A short lossless clip starting `start` seconds into `source`, for picture checks."""
+    start = min(start, max(0.0, duration_of(source) - 5))
+    vf = ["-vf", "decimate=cycle=5", "-fps_mode", "passthrough"] if remove_pulldown else []
+    run(["ffmpeg", "-y", "-loglevel", "error", "-ss", str(start), "-i", str(source), "-map", "0:v:0", *vf,
+         "-frames:v", str(frames), "-c:v", "libx264", "-qp", "0", "-preset", "ultrafast", "-an", "-sn",
+         str(destination)], check=True)
+    return start
+
+
+def picture_check(source, work, device, settings, scale=2, height=1080, model="realesr-animevideov3",
+                  start=30, frames=8):
+    """Compare `settings` with the known-good baseline on a few frames. Returns the PSNR in dB."""
+    work.mkdir(parents=True, exist_ok=True)
+    clip = work / "check_clip.mkv"
+    make_check_clip(source, clip, start, frames)
+    safe = lossless_run(clip, work / "check_safe.mkv", device, SAFE_SETTINGS, scale, height, model)
+    test = lossless_run(clip, work / "check_test.mkv", device, settings, scale, height, model)
+    return psnr_db(safe, test)
 
 
 class GpuSampler:

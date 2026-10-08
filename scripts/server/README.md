@@ -37,10 +37,15 @@ python3 ~/v2x/src/scripts/server/upscale.py episode.mkv --procs-per-gpu 4
 python3 ~/v2x/src/scripts/server/upscale.py episode.mkv --limit-seconds 60 --chunk-seconds 15   # quick test
 ```
 
-Defaults: `realesr-animevideov3` x2 resized to 1080p, tile 600, Winograd off and fp16 math,
+Defaults: `realesr-animevideov3` x2 resized to 1080p, tile 600, ncnn's own settings,
 x264 `slow` crf 18, 3:2 pulldown removed (`--no-remove-pulldown` for native 29.97/30 fps video),
 60 s chunks. Finished chunks are kept in `~/v2x/work/<name>/out`, so rerunning resumes. The result
 is written to `~/v2x/work/<name>/<name>.1080p.mkv` (or `-o`).
+
+Before the job starts, `upscale.py` compares a few frames made with the chosen settings against a
+known-good baseline (ncnn defaults, automatic tile) and stops if they differ (below 40 dB). Settings
+that are fast on one GPU can give wrong output on another: Winograd off is fine on a T4 but
+corrupts every frame on an RTX PRO 6000 Blackwell (`docs/hypotheses.md`, T22).
 
 ## Clean up
 

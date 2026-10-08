@@ -51,8 +51,11 @@ def parse_args():
     parser.add_argument("--preset", default="slow")
     parser.add_argument("--crf", type=int, default=18)
     parser.add_argument("--queue-size", type=int, default=4)
-    parser.add_argument("--ncnn", default=json.dumps(common.BEST_NCNN),
-                        help='ncnn options as JSON, e.g. \'{"VIDEO2X_NCNN_WINOGRAD": "0"}\'; "{}" for ncnn defaults')
+    parser.add_argument("--ncnn", default=json.dumps(common.DEFAULT_NCNN),
+                        help='ncnn options as JSON, e.g. \'{"VIDEO2X_NCNN_FP16_ARITH": "1"}\' (default: ncnn defaults). '
+                             'Settings can be GPU-specific: check them with bench.py first')
+    parser.add_argument("--skip-picture-check", action="store_true",
+                        help="do not compare the chosen settings with the known-good baseline before starting")
     return parser.parse_args()
 
 
@@ -80,6 +83,17 @@ def main():
     src_dir, out_dir = work / "src", work / "out"
     src_dir.mkdir(parents=True, exist_ok=True)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- 0. Picture check: some ncnn settings or tile sizes give wrong output on some GPUs ---
+    chosen = {"ncnn": ncnn, "tile": args.tile}
+    if not args.skip_picture_check and chosen != common.SAFE_SETTINGS:
+        print("Checking the picture against the known-good baseline (ncnn defaults, automatic tile)...")
+        db = common.picture_check(source, work / "check", devices[0], chosen, args.scale, args.height, args.model,
+                                  start=min(30.0, args.limit_seconds / 2) if args.limit_seconds else 30.0)
+        if db is None or db < common.BROKEN_BELOW_DB:
+            sys.exit(f"Picture check FAILED: {db} dB against the baseline. These settings give wrong output on "
+                     "this GPU. Use other --ncnn/--tile values (see bench.py), or --skip-picture-check to force.")
+        print(f"  OK: {db:.1f} dB against the baseline")
 
     # --- 1. Split ---
     marker = src_dir / "split.done"
