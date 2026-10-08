@@ -46,12 +46,16 @@ if [ ! -x "$MM" ]; then
 fi
 
 # --- 3. Build tools and libraries (private environment) ---
+# glslang provides glslangValidator, which the model wrappers use to compile their shaders
+PACKAGES=(python=3.12 numpy pandas
+          cmake ninja make pkg-config c-compiler cxx-compiler
+          "ffmpeg=7.*=gpl*" libvulkan-loader libvulkan-headers glslang libboost-devel)
 if [ ! -d "$V2X_HOME/env/conda-meta" ]; then
     echo "== Creating the private environment (a few minutes)"
-    "$MM" create -y -p "$V2X_HOME/env" -c conda-forge --override-channels \
-        python=3.12 numpy pandas \
-        cmake ninja make pkg-config c-compiler cxx-compiler \
-        "ffmpeg=7.*=gpl*" libvulkan-loader libvulkan-headers libboost-devel
+    "$MM" create -y -p "$V2X_HOME/env" -c conda-forge --override-channels "${PACKAGES[@]}"
+else
+    echo "== Updating the private environment (installs anything missing)"
+    "$MM" install -y -p "$V2X_HOME/env" -c conda-forge --override-channels "${PACKAGES[@]}"
 fi
 
 # --- 4. Submodules and the fork's patch ---
@@ -71,6 +75,8 @@ fi
 
 # --- 5. Build and install into $V2X_HOME/app ---
 echo "== Building (uses all cores)"
+# A failed earlier configure can leave tool paths cached as not found
+rm -f "$V2X_HOME/build/CMakeCache.txt"
 "$MM" run -p "$V2X_HOME/env" cmake -G Ninja -S "$SRC" -B "$V2X_HOME/build" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$V2X_HOME/app" \
