@@ -99,6 +99,8 @@ Estimate: a 24-minute episode at 23.976 fps is ~35,000 frames: ~7 h at 1.35 fps,
 
 ## 5. Where we stopped (2026-10-08) and what is next
 
+**GPU server (2026-10-08):** an RTX PRO 6000 Blackwell Server Edition (96 GB, 32 CPU cores, driver 595, Ubuntu 24.04, no root, about 13 GB free disk) at `administrator@173.208.247.35`, reachable from the Windows machine with `ssh -i ~/.ssh/aivastra_gpu_dev`. Video2X is built there in `~/v2x` with `scripts/server/setup.sh` (no root; `cleanup.sh` removes everything). Another user's process holds 37 GB of that GPU. Results so far (T22, T23 in `docs/hypotheses.md`): one process 6.4 fps, 8 processes 16.6 fps (about 10x a T4); Winograd off corrupts the picture on this GPU, so the server scripts use ncnn's own settings and check every setting's picture against a baseline.
+
 **Speed hypotheses:** every speed idea tested so far (passed or failed) and the backlog of ideas still to test are in `docs/hypotheses.md`, with the fixed control setting every comparison must use. Add new results there. A Kaggle notebook (`Video2X-Kaggle.ipynb`) runs the same 1080p job on two T4s with chunked parallel processing; its first test gave 2.49 fps for 300 frames on 2 GPUs.
 
 ### Settled, do not reopen
