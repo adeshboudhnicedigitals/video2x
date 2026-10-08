@@ -1,0 +1,38 @@
+diff --git a/src/realesrgan.cpp b/src/realesrgan.cpp
+index 6c792c9..6f51105 100644
+--- a/src/realesrgan.cpp
++++ b/src/realesrgan.cpp
+@@ -3,8 +3,20 @@
+ #include "realesrgan.h"
+ 
+ #include <algorithm>
++#include <cstdio>
++#include <cstdlib>
+ #include <vector>
+ 
++// Experiment switches (Video2X fork): override ncnn options from environment variables so
++// different settings can be compared without rebuilding. Unset or empty keeps the default.
++static bool env_flag(const char* name, bool fallback)
++{
++    const char* value = getenv(name);
++    if (!value || !*value)
++        return fallback;
++    return atoi(value) != 0;
++}
++
+ static const uint32_t realesrgan_preproc_spv_data[] = {
+     #include "realesrgan_preproc.spv.hex.h"
+ };
+@@ -52,6 +64,12 @@ RealESRGAN::RealESRGAN(int gpuid, bool _tta_mode)
+     net.opt.use_int8_storage = true;
+     net.opt.use_int8_arithmetic = false;
+ 
++    net.opt.use_fp16_arithmetic = env_flag("VIDEO2X_NCNN_FP16_ARITH", net.opt.use_fp16_arithmetic);
++    net.opt.use_cooperative_matrix = env_flag("VIDEO2X_NCNN_COOPMAT", net.opt.use_cooperative_matrix);
++    net.opt.use_winograd_convolution = env_flag("VIDEO2X_NCNN_WINOGRAD", net.opt.use_winograd_convolution);
++    fprintf(stderr, "[librealesrgan] ncnn options: fp16_arithmetic=%d cooperative_matrix=%d winograd=%d\n",
++            (int)net.opt.use_fp16_arithmetic, (int)net.opt.use_cooperative_matrix, (int)net.opt.use_winograd_convolution);
++
+     net.set_vulkan_device(gpuid);
+ 
+     realesrgan_preproc = 0;
