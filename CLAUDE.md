@@ -2,9 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Current work
+## Direction
 
-See `HANDOFF.md` for the state of the work (pipelining, the Kaggle and Colab notebooks, the GPU server scripts in `scripts/server/`) and `docs/hypotheses.md` for every speed measurement and the open hypotheses.
+The Video2X code described below (ncnn + Vulkan) is the **baseline and is being phased out**. The project is moving to TensorRT/ONNX upscaling tools (AnimeJaNai family first), still in this repo; after tests pass the Video2X code is removed and the repo detaches from the fork. Do not add features to the C++ code unless asked. See `HANDOFF.md` for the plan and next steps, `docs/hypotheses.md` for every measurement, and `docs/legacy-video2x-handoff.md` for the archived ncnn-era handoff.
 
 ## Overview
 
