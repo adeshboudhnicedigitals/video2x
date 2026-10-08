@@ -95,7 +95,7 @@ Visual impressions (single frame, from the Step 3D image): all models are clearl
 
 **Decision (2026-10-08): the 1080p path is x2 then downscale to 1080p** (not shrink-first). Built: `--width`/`--height` now work for Real-ESRGAN and Real-CUGAN. The filter takes the target size from the encoder context and `conversions::ncnn_mat_to_avframe` resizes with `SWS_LANCZOS | SWS_ACCURATE_RND | SWS_FULL_CHR_H_INT` in the same swscale call that converts to the output pixel format, so there is one encode and no intermediate file. Without the options the conversion is unchanged (`SWS_BILINEAR`, same size). Checked on the Linux machine with a 320x180 clip: x2 with `--height 270` gives 480x270, `--width 400` gives 400x226, both together give the exact size; the result matches an ffmpeg Lanczos downscale of the plain x2 output at 47 dB PSNR. **Not yet run on Colab or at 1080p.** The scale factor is not auto-picked (item 3 below proposed that); the user sets scale 2. Side finding: Real-ESRGAN does run on the Intel iGPU at 320x180, so the hang at 1080p there depends on frame size.
 
-Estimate: a 24-minute episode is ~35,000 frames: ~7 h at 1.35 fps, ~3.4 h at 2.9 fps.
+Estimate: a 24-minute episode at 23.976 fps is ~35,000 frames: ~7 h at 1.35 fps, ~3.4 h at 2.9 fps. **Correction (2026-10-08):** the user's `AnimePahe_Bleach_-_271` file is 29.97 fps with 3:2 pulldown (43,944 frames in 1466 s), so it is ~9.2 h at 1.33 fps (one T4) or ~4.9 h at 2.49 fps (two T4); see T17 and H1 in `docs/hypotheses.md`.
 
 ## 5. Where we stopped (2026-10-08) and what is next
 
@@ -106,7 +106,7 @@ Estimate: a 24-minute episode is ~35,000 frames: ~7 h at 1.35 fps, ~3.4 h at 2.9
 - **Goal:** 1080p output, best picture quality. Model `realesr-animevideov3`, scale 2, then resize to 1080p (`output_height = 1080`, `--height 1080`).
 - **CPU is not the limit on Colab.** The encoder costs 3% (`veryfast`) to 10% (`slow`), pipelining adds 4%. The T4 is held back by its power cap. The swscale cache and NVENC were not built and should not be.
 - **NVENC does not work** with this build (the FFmpeg libraries `video2x` links have no NVENC encoders). Not worth fixing for a 3-10% ceiling.
-- **Notebook defaults (cell 2.1):** `realesrgan`, `realesr-animevideov3`, scale 2, `output_height = 1080`, `libx264`, `preset = slow`, `crf = 18`, `tile_size = 400`, `queue_size = 4`. Expected speed about 1.33 fps on a T4, which is about 7.2 hours for a 24-minute episode at 23.976 fps (the Colab free limit is 12 hours).
+- **Notebook defaults (cell 2.1):** `realesrgan`, `realesr-animevideov3`, scale 2, `output_height = 1080`, `libx264`, `preset = slow`, `crf = 18`, `tile_size = 400`, `queue_size = 4`. Expected speed about 1.33 fps on a T4, which is about 7.2 hours for a 24-minute episode at 23.976 fps (the 271 file is 29.97 fps, so about 9.2 hours) (the Colab free limit is 12 hours).
 
 ### Not yet verified
 
