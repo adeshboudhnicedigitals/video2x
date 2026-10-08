@@ -1,4 +1,4 @@
-# Handoff: Video2X fork (pipelining, Colab notebook, quality tests)
+# Handoff: Video2X fork (pipelining, notebooks, GPU server, speed research)
 
 Written for the next Claude Code session (or any developer) picking this work up on another machine.
 Read `CLAUDE.md` first for build commands and architecture; this file covers the state of the work and what is next.
@@ -7,14 +7,14 @@ Read `CLAUDE.md` first for build commands and architecture; this file covers the
 
 - The user owns the fork `https://github.com/adeshboudhnicedigitals/video2x` and **cannot push to upstream** (`k4yt3x/video2x`). Remote `origin` is upstream (never push there); remote `fork` is theirs (push there). Check `git remote -v` first: on the Linux machine the clone has no `fork` remote and `origin` is the user's fork.
 - **Goal (current scope): 1080p output only, with the best picture quality we can get.** Clean, sharp and less blurry, "like modern anime", not like old anime. 4K and 8K are out of scope. 1440p ("2K") may be planned later, but nothing should be built or tuned for it now. Judge every change by 1080p output quality first, then by time to finish. The 4K/8K measurements in section 4 are kept as evidence about bottlenecks, not as targets. Their material is old (about 2008) anime episodes, for example Bleach. Their files are labelled 1080p (measured 1908x1080) but the content looks like an upscaled lower-resolution master. Picture quality matters more than raw speed, but runs must finish in reasonable time.
-- **Where it runs:** free Google Colab, Tesla T4, **2 vCPUs** (x264 picks 3 threads). Local machine is Windows with **no compiler, CMake, ffmpeg or GPU on PATH**, so nothing can be built locally. All building and testing happens on Colab. A second machine (Linux, i5-10210U, Intel UHD iGPU, NVIDIA MX130 with no working driver) does build it: static build with bundled deps into `build/video2x-install`, run with `LD_LIBRARY_PATH=build/video2x-install/lib`. There libplacebo runs (0.70 fps at 1080p to 4K, GPU-bound) but Real-ESRGAN hangs at frame 0 on the Intel Vulkan driver (cause not found), so model tests still need Colab.
+- **Where it runs (updated 2026-10-08):** three places. (1) **GPU server** (main target now): RTX PRO 6000 Blackwell, see section 5. (2) **Kaggle**, 2x Tesla T4, 4 vCPUs: `Video2X-Kaggle.ipynb`. (3) **Colab**, one T4, 2 vCPUs: `Video2X.ipynb`. The Windows machine now has a local build too (MSVC Build Tools, CMake, Ninja, ffmpeg via winget; Vulkan SDK in `C:\VulkanSDK`; prebuilt FFmpeg 7.1 and ncnn in `third_party/ffmpeg-shared` and `third_party/ncnn-shared`, excluded in `.git/info/exclude`; build script `C:\Users\tejar\.claude\jobs\b658bcc1\tmp\build.bat` loads `vcvars64.bat`). Its install step fails on a Boost DLL path, so `boost_program_options-vc145-*.dll` and `share/models` were copied into `build/video2x-install/bin` by hand. It runs on the Intel UHD iGPU only (0.34 fps at 1080p) and `video2x.exe` crashes on exit with 0xC0000409 after writing the output; use it for compile checks and tiny clips. A second machine (Linux, i5-10210U, Intel UHD iGPU, NVIDIA MX130 with no working driver) does build it: static build with bundled deps into `build/video2x-install`, run with `LD_LIBRARY_PATH=build/video2x-install/lib`. There libplacebo runs (0.70 fps at 1080p to 4K, GPU-bound) but Real-ESRGAN hangs at frame 0 on the Intel Vulkan driver (cause not found), so model tests still need Colab.
 - The user prefers short, direct answers and wants to be asked before outward-facing actions (pushing, publishing).
 
 ## 2. Git state
 
 - Work is on `master` of the fork (branch `feat/frame-pipelining` points at the same commits). Local `master` tracks `origin/master`, so git reports it "ahead"; that is expected.
 - Never run `git add -A`. These stay **untracked and uncommitted** on purpose:
-  - `AnimePahe_Bleach_-_271_BD_1080p_Judas.mp4` (222 MB) and `Bleach - 309.mkv` (349 MB): the user's episodes, large and not ours to publish.
+  - `AnimePahe_Bleach_-_271_BD_1080p_Judas.mp4` (222 MB, 1908x1080, 29.97 fps with 3:2 pulldown, 43,944 frames): the user's episode, large and not ours to publish. (`Bleach - 309.mkv` is no longer on the Windows machine.) Local samples cut from it are in `data/` (git-ignored): `sample_10s.mp4`, `sample_60s.mp4`, `small.mp4` (320x180, 3 s), plus the analysis scripts `dupes.py` and `dupes_full.py`.
   - `download.png`: a screenshot of the Step 3D comparison (a frame from the show).
   - On the Linux machine: `[AniDL] Bleach S14 - 06 - [1080P][BD][D-A][ZR][X265].mkv` (the user's episode) and `sample_10s.mp4` (its first 10 s, 1920x1080, 29.97 fps, 300 frames; the sample used for the Colab tests). Local test clips and outputs go under `data/`, which is git-ignored.
   - `.superpowers/` is git-ignored local scratch (task briefs, reports, one-off notebook edit scripts, a progress ledger). It is not part of the repo.
@@ -60,6 +60,15 @@ Older notes in this file use the previous step names: Step 0/1/2/2B are now 1.1-
 
 Gotchas learned: Colab cells run one at a time, so Step 4 can only run after a job finishes; opening an updated notebook starts a fresh runtime (re-runs the whole build), so changed cells are best pasted into the live session; use `--noise-level=-1` (with `=`) because Boost can read a bare `-1` as an option; the summary line with average FPS is only printed at `--log-level info` or lower; clip cuts with `-c copy` snap to the previous keyframe.
 
+### 3.3 Kaggle notebook `Video2X-Kaggle.ipynb` (repo root)
+
+The maintained notebook, for Kaggle's 2x T4 sessions. Generated by `.superpowers/sdd/make_kaggle.py`. Cells: 1.1 GPU and Vulkan check (installs the NVIDIA Vulkan user-space driver if missing), 1.2 build from the fork with the ncnn-options patch, 1.3 input from `/kaggle/input`, 2.1 chunked upscale with one worker per GPU (`limit_seconds`, `chunk_seconds`, `precise_split`, `remove_pulldown`, `ncnn_options`, tile 600; frame counts checked per chunk; resumable), 2.2 join with the original audio and subtitles, 3.1 one-GPU A/B test of ncnn settings and tile sizes (speed with `--benchmark`, PSNR). Cell 2.1 currently defaults to a 60 s test (`limit_seconds = 60`, `chunk_seconds = 15`, `precise_split = True`); for a whole episode use `limit_seconds = 0`, `precise_split = False`, `chunk_seconds` 60-240.
+
+### 3.4 ncnn options patch and server scripts
+
+- `patches/librealesrgan-ncnn-options.patch`: lets `VIDEO2X_NCNN_COOPMAT`, `VIDEO2X_NCNN_FP16_ARITH` and `VIDEO2X_NCNN_WINOGRAD` override ncnn's options in the Real-ESRGAN wrapper and logs the options used. Applied at build time by both notebooks and `setup.sh`; the submodule itself is not changed.
+- `scripts/server/`: `setup.sh` (no-root build into `~/v2x`), `env.sh`, `cleanup.sh`, `upscale.py` (chunked job with N processes per GPU, streaming split, picture check before the job, join), `bench.py` (presets `ncnn`, `tiles`, `procs` or a JSON file; speed plus picture check against a baseline; CSV), `v2x_common.py`, `README.md`.
+
 ## 4. Measurements so far (Colab T4, 2 vCPU)
 
 Source: user's sample, 1920x1080, 30 fps. Model `realesr-animevideov3`.
@@ -97,39 +106,56 @@ Visual impressions (single frame, from the Step 3D image): all models are clearl
 
 Estimate: a 24-minute episode at 23.976 fps is ~35,000 frames: ~7 h at 1.35 fps, ~3.4 h at 2.9 fps. **Correction (2026-10-08):** the user's `AnimePahe_Bleach_-_271` file is 29.97 fps with 3:2 pulldown (43,944 frames in 1466 s), so it is ~9.2 h at 1.33 fps (one T4) or ~4.9 h at 2.49 fps (two T4); see T17 and H1 in `docs/hypotheses.md`.
 
-## 5. Where we stopped (2026-10-08) and what is next
+## 5. Where we stopped (end of 2026-10-08) and what is next
 
-**GPU server (2026-10-08):** an RTX PRO 6000 Blackwell Server Edition (96 GB, 32 CPU cores, driver 595, Ubuntu 24.04, no root, about 13 GB free disk) at `administrator@173.208.247.35`, reachable from the Windows machine with `ssh -i ~/.ssh/aivastra_gpu_dev`. Video2X is built there in `~/v2x` with `scripts/server/setup.sh` (no root; `cleanup.sh` removes everything). Another user's process holds 37 GB of that GPU. Results so far (T22, T23 in `docs/hypotheses.md`): one process 6.4 fps, 8 processes 16.6 fps (about 10x a T4); Winograd off corrupts the picture on this GPU, so the server scripts use ncnn's own settings and check every setting's picture against a baseline.
+**Read `docs/hypotheses.md` first.** It is the lab notebook: the control setting, every tested hypothesis T1-T25 with numbers and verdicts, an analysis of why more frames in parallel do not help one T4, and the backlog H1-H15. Add new results there.
 
-**Speed hypotheses:** every speed idea tested so far (passed or failed) and the backlog of ideas still to test are in `docs/hypotheses.md`, with the fixed control setting every comparison must use. Add new results there. A Kaggle notebook (`Video2X-Kaggle.ipynb`) runs the same 1080p job on two T4s with chunked parallel processing; its first test gave 2.49 fps for 300 frames on 2 GPUs.
+### State in one paragraph
+
+The full 1080p job works end to end on the GPU server: the user's 24-minute Bleach 271 episode took about 40 minutes (35,156 frames, 18.2 fps with x264 `slow` encoding, 8 `video2x` processes on one RTX PRO 6000 Blackwell; T24). For comparison: about 9.2 h on one Colab T4 and about 3.7 h on Kaggle's two T4s. The result is on the server at `~/v2x/work/AnimePahe_Bleach_-_271_BD_1080p_Judas/AnimePahe_Bleach_-_271_BD_1080p_Judas.1080p.mkv` (1908x1080, 23.976 fps, 601 MB, duration identical to the input, audio included). Since then the split runs in the background so workers start immediately (T25); a full episode with that change has not been rerun (expected about 34 min).
+
+### GPU server
+
+- RTX PRO 6000 Blackwell Server Edition (96 GB, 188 SMs, 600 W limit), 32 CPU cores, driver 595.58, Ubuntu 24.04, no root, disk 96% full (about 17 GB free). `ssh -i ~/.ssh/aivastra_gpu_dev administrator@173.208.247.35` works from the Windows machine without a password (BatchMode).
+- **Another user's process (`/home/aivastra/com/venv/bin/python3`) holds 37 GB of the GPU.** It was idle during all our runs; check `nvidia-smi pmon -c 3` before benchmarking.
+- Everything of ours is in `~/v2x` (no root, nothing system-wide): `src` (clone of the fork, with the ncnn-options patch applied), `env` (micromamba conda-forge environment), `build`, `app` (installed video2x), `cache`, `mamba`, `work`. Built with `scripts/server/setup.sh`; `scripts/server/cleanup.sh` deletes it all. `. ~/v2x/env.sh` in every shell. See `scripts/server/README.md`.
+- `~/v2x/work` holds the uploaded episode, the full-episode result plus its chunks (`src/`, `out/`), a 3-minute test (`*_test`), benchmark CSVs in `bench/`, and the run scripts `run_bench.sh`, `run_episode.sh`, `run_test.sh` (nohup wrappers; logs `bench_*.log`, `episode.log`, `stream_test.log`). The chunk folders and the test can be deleted once the user has downloaded the result.
+- Setup fixes found on the server: conda-forge needed `glslang` (the model wrappers compile shaders with glslangValidator), and conda's cross linker needs `-Wl,-rpath-link` to ncnn's bundled shared glslang.
 
 ### Settled, do not reopen
 
-- **Goal:** 1080p output, best picture quality. Model `realesr-animevideov3`, scale 2, then resize to 1080p (`output_height = 1080`, `--height 1080`).
-- **CPU is not the limit on Colab.** The encoder costs 3% (`veryfast`) to 10% (`slow`), pipelining adds 4%. The T4 is held back by its power cap. The swscale cache and NVENC were not built and should not be.
-- **NVENC does not work** with this build (the FFmpeg libraries `video2x` links have no NVENC encoders). Not worth fixing for a 3-10% ceiling.
-- **Notebook defaults (cell 2.1):** `realesrgan`, `realesr-animevideov3`, scale 2, `output_height = 1080`, `libx264`, `preset = slow`, `crf = 18`, `tile_size = 400`, `queue_size = 4`. Expected speed about 1.33 fps on a T4, which is about 7.2 hours for a 24-minute episode at 23.976 fps (the 271 file is 29.97 fps, so about 9.2 hours) (the Colab free limit is 12 hours).
+- **Goal:** 1080p output, best picture quality. Model `realesr-animevideov3`, scale 2, resized to 1080p (`--height 1080`, Lanczos inside the swscale conversion).
+- **3:2 pulldown removal** (`decimate=cycle=5`, whole file, one pass) is on by default: 20% fewer frames, checked at full resolution (T17, T18). Do not remove pulldown per chunk: restarting the cycle at chunk boundaries can drift video against audio (T25).
+- **ncnn settings are GPU-specific.** T4: Winograd off + fp16 math is 5% faster and correct (T20), tile 600 (T21); these are the Kaggle notebook defaults. Blackwell: Winograd off corrupts every frame (T22); use ncnn's defaults there. The server scripts default to ncnn's settings and check every setting's picture against a baseline (ncnn defaults, automatic tile) before trusting it; keep that check.
+- **One process cannot fill a large GPU** (T23): 8 processes on the Blackwell gave 2.6x one process. On a T4 the bottleneck is kernel efficiency (power-capped at about 10-13% of the tensor-core peak, analysis section in `docs/hypotheses.md`).
+- CPU and NVENC on Colab (T2, T3), model choice (T7, T13): closed.
 
 ### Not yet verified
 
-- **Cell 2.1 has not been run on Colab since `output_height`, `tile_size` and the `slow` preset were added.** Cell 3.1 used the same options (`--height 1080`, `--realesrgan-tile-size`) successfully, so the binary side works at 1080p; the cell's own command building was only checked offline. First thing to do next session: run 1.2 (rebuild), 1.3 and 2.1 on the 10 s sample, confirm the output is 1920x1080 with 300 of 300 frames, and look at the picture.
-- The picture of the 1080p result has not been looked at by anyone: not against the source, not in motion (flicker), not at tile seams with tile 400.
-- Tile sizes between 300 and 700 (cell 3.1 lists `[300, 400, 500, 700]`; optional rerun). All speed numbers are single runs.
-- x264 `medium` (between `veryfast` at 97% and `slow` at 90% of the ceiling).
+- The output picture has only been checked on a few still frames (two whole frames of the full episode, the picture-check PSNR). Nobody has compared it side by side with the source or watched it in motion (flicker, tile seams, the roughly 1% of pulldown cycles where a real frame is dropped).
+- The full episode with the streaming split (expected about 34 min instead of 40).
+- More than 8 processes on the Blackwell (it was at 85% utilisation and 373 W of 600 in the benchmark, 100% and about 446 W in the real job), and tile 400 with 8 processes.
+- The Colab notebook (`Video2X.ipynb`) has not been run since cell 2.1 got `output_height`, `tile_size` and `slow`; it does not have the Kaggle notebook's ncnn options or chunking. The Kaggle notebook is the maintained one.
 
 ### Next, in the order recommended to the user
 
-1. **Verify the real job** (the three checks above) and let the user judge the 1080p picture against the source.
-2. **10-bit path (quality).** The user's sources decode as `yuv420p10le`. `conversions.cpp` converts every frame to 8-bit `BGR24` for the network and back, and the encoder then writes a 10-bit file that holds 8-bit data. This risks banding in gradients (sky, glow). A real fix needs a 16-bit or float path into `ncnn::Mat` and back; medium-sized work. A cheaper first check is whether banding is visible in the output at all.
-3. **Input chroma upsampling (quality).** `convert_avframe_pix_fmt` uses `SWS_BILINEAR` for YUV 4:2:0 to BGR, which softens colour edges before the network sees them. Changing the flag is small but changes every output frame, so it needs a side-by-side check.
-4. **Speed, only large levers are left:** a faster Colab GPU (L4/A100); two Colab sessions with the episode split in half and joined afterwards (frames are independent for this model, so this scales nearly linearly); shrink to 720p first, x2, resize to 1080p (2.93 fps measured against 1.35, looked nearly the same on one frame, but throws away source detail and the user chose full x2 for quality); a TensorRT/CUDA backend (2.85x on the raw network in PyTorch fp16 `channels_last`; large build; the official `.pth` is x4 only and the x2 model exists only as ncnn `.param/.bin`).
+1. **Let the user judge the 1080p result** against the source (download command below), including motion.
+2. **Held-frame skipping (H1b):** old anime holds drawings for 2-3 frames; after pulldown removal about 61% of frames are unique on average (T17). Reusing the upscaled frame for exact repeats could give 1.4-3.4x by scene. Needs a threshold and a picture check.
+3. **More processes on the Blackwell** (12, 16) and tile 400 at 8 processes: `bench.py --configs`.
+4. **Quality items:** 10-bit path (the network sees 8-bit RGB) and chroma upsampling (`SWS_BILINEAR` on input); see the quality section of `docs/hypotheses.md`.
+5. **CUDA/TensorRT backend (H3, H5):** cuDNN ran the raw network 2.85x faster than ncnn on a T4 (T10); FP8/FP4 on Blackwell. Large job; needs the x2 weights converted from ncnn `.param/.bin`.
+
+Download the result to the Windows machine (PowerShell):
+
+```powershell
+scp -i $HOME\.ssh\aivastra_gpu_dev administrator@173.208.247.35:v2x/work/AnimePahe_Bleach_-_271_BD_1080p_Judas/AnimePahe_Bleach_-_271_BD_1080p_Judas.1080p.mkv C:\Users\tejar\Downloads\
+```
 
 ### Known problems, not being worked on
 
-- On the Linux machine, Real-ESRGAN hangs at frame 0 on the Intel UHD Vulkan driver with a 1080p input but runs at 320x180, so it depends on frame size (GPU memory or a driver limit; not investigated). Use small clips for local checks.
-- The same machine's NVIDIA MX130 has no working driver.
-- RIFE is broken on Colab (notebook cell 4.1). Cells 4.1-4.4 are experiments kept for reference; the user was asked whether to delete them and has not answered.
-- The proposed auto-pick of the scale factor for a target size was not built; the user sets the scale and the output height themselves.
+- On the Linux laptop, Real-ESRGAN hangs at frame 0 on the Intel UHD Vulkan driver with a 1080p input (works at 320x180); the Windows Intel driver does not hang. Its NVIDIA MX130 has no working driver.
+- RIFE is broken on Colab (notebook cell 4.1). Cells 4.1-4.4 of the Colab notebook are experiments kept for reference.
+- The proposed auto-pick of the scale factor for a target size was not built.
 
 ## 6. Practical notes
 
@@ -137,3 +163,6 @@ Estimate: a 24-minute episode at 23.976 fps is ~35,000 frames: ~7 h at 1.35 fps,
 - Cells are validated by `ast.parse` after stubbing out `!`/`%` lines; none of them has been run locally.
 - Real-CUGAN tile/prepadding settings live in `src/filter_realcugan.cpp`; Real-ESRGAN loads `models/realesrgan/<model>-x<scale>.param`.
 - Upstream facts worth knowing: `video2x --help` documents flags; the CLI prints the average-FPS summary only at `info` log level; `--benchmark` skips encoding but still creates an output file.
+- **Remote commands on the server:** run long jobs with a small script started by `nohup bash script.sh > /dev/null 2>&1 < /dev/null & disown` in its own `ssh` call, or the ssh session stays attached. Set `PYTHONUNBUFFERED=1`, or logs stay empty until the end. Do not use `pkill -f <pattern>` over ssh when the pattern also appears in the ssh command itself: it kills the ssh session. Use PIDs from `pgrep`.
+- **Picture checks must look at the picture.** A PSNR between two settings can be high while both are wrong; compare against a known-good baseline and look at a frame. Frames at the very start of an episode are often black, so take check frames from 30 s in.
+- Kaggle notebook cells are generated by `.superpowers/sdd/make_kaggle.py` (git-ignored scratch); edit the generator and rerun it rather than editing the `.ipynb` by hand.

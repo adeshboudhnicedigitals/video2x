@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current work
 
-See `HANDOFF.md` for the state of the pipelining work, the Colab notebook (`Video2X.ipynb`), measurements so far and the open items.
+See `HANDOFF.md` for the state of the work (pipelining, the Kaggle and Colab notebooks, the GPU server scripts in `scripts/server/`) and `docs/hypotheses.md` for every speed measurement and the open hypotheses.
 
 ## Overview
 
