@@ -99,6 +99,8 @@ Estimate: a 24-minute episode is ~35,000 frames: ~7 h at 1.35 fps, ~3.4 h at 2.9
 
 ## 5. Where we stopped (2026-10-08) and what is next
 
+**Speed hypotheses:** every speed idea tested so far (passed or failed) and the backlog of ideas still to test are in `docs/hypotheses.md`, with the fixed control setting every comparison must use. Add new results there. A Kaggle notebook (`Video2X-Kaggle.ipynb`) runs the same 1080p job on two T4s with chunked parallel processing; its first test gave 2.49 fps for 300 frames on 2 GPUs.
+
 ### Settled, do not reopen
 
 - **Goal:** 1080p output, best picture quality. Model `realesr-animevideov3`, scale 2, then resize to 1080p (`output_height = 1080`, `--height 1080`).
