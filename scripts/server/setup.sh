@@ -77,7 +77,13 @@ fi
 echo "== Building (uses all cores)"
 # A failed earlier configure can leave tool paths cached as not found
 rm -f "$V2X_HOME/build/CMakeCache.txt"
+# ncnn's bundled glslang is built as shared libraries. conda's linker is a cross linker, so it
+# does not follow libvideo2x's rpath to find them when linking the video2x program.
+GLSLANG_BUILD="$V2X_HOME/build/third_party/ncnn/glslang"
+RPATH_LINK="-Wl,-rpath-link,$GLSLANG_BUILD/glslang:$GLSLANG_BUILD/SPIRV"
 "$MM" run -p "$V2X_HOME/env" cmake -G Ninja -S "$SRC" -B "$V2X_HOME/build" \
+    -DCMAKE_EXE_LINKER_FLAGS="$RPATH_LINK" \
+    -DCMAKE_SHARED_LINKER_FLAGS="$RPATH_LINK" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$V2X_HOME/app" \
     -DCMAKE_PREFIX_PATH="$V2X_HOME/env" \
